@@ -328,7 +328,7 @@ def run_query(context, gps_starttime, gps_endtime):
             a.mode IN ('HW_LFILES', 'VOLTAGE_START', 'VOLTAGE_BUFFER') 
             AND a.starttime BETWEEN %s AND %s 
             AND b.deleted = False AND b.remote_archived = True
-            AND a.dataquality IN (1,2,6) --Good, some issues and processed 
+            AND a.dataquality IN (1,2,3,6) --Good, some issues, unusable and processed 
         GROUP BY 
              public.timestamp_gps(a.starttime)::timestamp::date
             ,p.projectid
@@ -466,16 +466,22 @@ def clear_months(date_from, date_to, local_db_conn):
 
 
 def populate(date_from, date_to, local_db_conn, mwa_context):
-    for year in range(date_from.year, date_to.year+1):
-        for month in range(date_from.month, date_to.month+1):
-            cal = calendar.monthrange(year, month)
-            last_day = cal[1]
+    print(f"Populate: {date_from} to {date_to}...")
 
-            from_dt = datetime(year, month, 1, 0, 0, 0)
-            to_dt = datetime(year, month, last_day, 23, 59, 59)
-            print("Working on: {0} to {1}...".format(from_dt, to_dt))
-            insert_stats_into_local_db(mwa_context, from_dt, to_dt, local_db_conn)
+    this_date = date_from
+    months = relativedelta(date_to, date_from).months + 1
 
+    for m in range(0, months + 1):
+        cal = calendar.monthrange(this_date.year, this_date.month)
+        last_day = cal[1]
+
+        from_dt = datetime(this_date.year, this_date.month, 1, 0, 0, 0)
+        to_dt = datetime(this_date.year, this_date.month, last_day, 23, 59, 59)
+        print("Working on: {0} to {1}...".format(from_dt, to_dt))
+        insert_stats_into_local_db(mwa_context, from_dt, to_dt, local_db_conn)
+
+        # Increment date by 1 month
+        this_date = this_date + relativedelta(this_date, months=1)
 
 def clear_plots():
     f = plt.figure()
@@ -483,6 +489,7 @@ def clear_plots():
     if f:
         f.clear()
         plt.close(f)
+
 
 def do_plot_archive_volume_per_month(local_db_conn, date_from, date_to, title, cumulative, filename):
     clear_plots()
@@ -737,7 +744,7 @@ def run_stats():
                                                             port=5432)
 
     today = datetime.today()
-    start_date = datetime(2013, 1, 1)
+    start_date = datetime(2010, 1, 1)
 
     six_months_ago = today - relativedelta(months=6)
 
