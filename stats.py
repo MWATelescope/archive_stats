@@ -30,6 +30,7 @@ def dump_stats(local_db_conn, filename):
         stats_csv_writer.writerow(header)
 
         total_bytes = 0
+        deleted_bytes = 0
         total_secs = 0
 
         conn = None
@@ -43,6 +44,7 @@ def dump_stats(local_db_conn, filename):
                                 ,mwa_array_configuration
                                 ,SUM(duration) as total_time_secs
                                 ,SUM(total_archived_data_bytes) as total_archived_data_bytes
+                                ,SUM(files_deleted_bytes) as deleted_bytes
                             FROM mwa.observation_vw
                             GROUP BY 1,2,3
                             ORDER BY 1,2""")
@@ -62,6 +64,9 @@ def dump_stats(local_db_conn, filename):
                 else:
                     terabytes = 0
 
+                if not row[5] is None:
+                    deleted_bytes += int(row[5])
+
                 stats_csv_writer.writerow(row + (hours, terabytes))
 
         except (Exception, psycopg2.DatabaseError) as error:
@@ -74,7 +79,31 @@ def dump_stats(local_db_conn, filename):
     print("{0} rows written to {1}.\n".format(i, filename))
     print(f"Total data: { bytes_to_petabytes(total_bytes) } PB\n")
     print(f"Total time: { total_secs / 3600 } hours\n")
+    print(f"Total deleted data: { bytes_to_petabytes(deleted_bytes) } PB\n")
 
+    marked_for_delete_bytes = 0
+
+    conn = None
+    try:
+        conn = local_db_conn.getconn()
+        cursor = conn.cursor()
+
+        cursor.execute("""SELECT 
+                           SUM(total_archived_data_bytes)   
+                          FROM mwa.observation_vw
+                          WHERE dataqualityname = 'Marked for Delete'                        
+                        """)
+
+        marked_for_delete_bytes = cursor.fetchone()[0]
+
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(error, traceback.print_exc())
+
+    finally:
+        if conn is not None:
+            local_db_conn.putconn(conn)
+
+    print(f"Data marked for delete: { bytes_to_terabytes(marked_for_delete_bytes) } TB\n")
 
 def dump_stats_by_project(local_db_conn, filename, project_names_list):
     i = 0
