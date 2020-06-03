@@ -364,7 +364,7 @@ def do_plot_archive_volume_per_project(local_db_conn, date_from, date_to, title,
     x_values = []
     legend_labels = []
     slice_no = 0
-    max_slices = 9
+    max_slices = 11
     other_bytes = 0
 
     sql = """SELECT projectid, COALESCE(SUM(total_archived_data_bytes),0) as total_archived_data_bytes 
