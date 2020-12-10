@@ -8,6 +8,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import csv
 import pyvo as vo
+from numpy.core.defchararray import isdigit
 
 DPI = 100
 
@@ -47,26 +48,27 @@ def dump_stats(vo_service, filename):
             i = i + 1
 
             if not row['total_time_secs'] is None:
-                total_secs += row['total_time_secs']
-                hours = row['total_time_secs'] / 3600
+                total_secs += int(row['total_time_secs'])
+                hours = int(row['total_time_secs']) / 3600
             else:
                 hours = 0.
 
             if not row['total_archived_data_bytes'] is None:
-                total_bytes += row['total_archived_data_bytes']
-                terabytes = bytes_to_terabytes(row['total_archived_data_bytes'])
+                this_bytes = int(row['total_archived_data_bytes'])
+                total_bytes += this_bytes
+                terabytes = bytes_to_terabytes(this_bytes)
             else:
                 terabytes = 0.
 
             if not row['deleted_bytes'] is None:
-                deleted_bytes += row['deleted_bytes']
+                deleted_bytes += int(row['deleted_bytes'])
 
-            stats_csv_writer.writerow((row['reporting_date'].decode('utf-8'),
-                                       row['projectid'].decode('utf-8'),
-                                       row['mwa_array_configuration'].decode('utf-8'),
-                                       row['total_time_secs'],
-                                       row['total_archived_data_bytes'],
-                                       row['deleted_bytes'],
+            stats_csv_writer.writerow((row['reporting_date'],
+                                       row['projectid'],
+                                       row['mwa_array_configuration'],
+                                       int(row['total_time_secs']),
+                                       int(row['total_archived_data_bytes']),
+                                       int(row['deleted_bytes']),
                                        hours,
                                        terabytes))
 
@@ -82,6 +84,10 @@ def dump_stats(vo_service, filename):
                                       """)
 
     marked_for_delete_bytes = results[0]['total_archived_bytes']
+    if isdigit(marked_for_delete_bytes):
+        marked_for_delete_bytes = int(marked_for_delete_bytes)
+    else:
+        marked_for_delete_bytes = 0
     print(f"Data marked for delete: { bytes_to_terabytes(marked_for_delete_bytes) } TB\n")
 
 
@@ -108,10 +114,10 @@ def dump_stats_by_project(local_db_conn, filename):
             i = i + 1
 
             # lookup project description
-            projid = row['projectid'].decode('utf-8')
-            projname = row['projectshortname'].decode('utf-8')
+            projid = row['projectid']
+            projname = row['projectshortname']
 
-            terabytes = bytes_to_terabytes(row['total_archived_data_bytes'])
+            terabytes = bytes_to_terabytes(int(row['total_archived_data_bytes']))
             stats_csv_writer.writerow((projid, projname, terabytes, ))
 
     print("{0} rows written to {1}.\n".format(i, filename))
@@ -207,7 +213,22 @@ def clear_plots():
         plt.close(f)
 
 
-def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cumulative, filename):
+def get_deleted_data_by_month(tap_service, date_from, date_to):
+
+    results = do_query(tap_service, f"""SELECT 
+                                             date_part('year', date_trunc('day', modtime)) as reporting_year 
+                                            ,date_part('month', date_trunc('day', modtime)) as reporting_month                                             
+                                            ,SUM(deleted_size) as deleted_bytes
+                                        FROM mwa.obs_data_file
+                                        WHERE    
+                                             modtime BETWEEN '{date_from}' AND '{date_to}'
+                                        GROUP BY 1,2
+                                        ORDER BY 1,2""")
+
+    return results
+
+
+def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cumulative, filename, ingest_only):
     clear_plots()
 
     x_axis = []
@@ -223,16 +244,29 @@ def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cum
     results = do_query(tap_service, f"""SELECT 
                                               date_part('year', date_trunc('day', starttime_utc)) as reporting_year 
                                              ,date_part('month', date_trunc('day', starttime_utc)) as reporting_month
-                                             ,SUM(total_archived_data_bytes) as total_archived_data_bytes 
+                                             ,SUM(total_archived_data_bytes + files_deleted_bytes) as total_data_bytes 
                                          FROM mwa.observation  
                                          WHERE    
                                              starttime_utc BETWEEN '{date_from}' AND '{date_to}'                                     
                                          GROUP BY 1,2
                                          ORDER BY 1,2 """)
+    deleted_results = None
+    if not ingest_only:
+        deleted_results = get_deleted_data_by_month(tap_service, date_from, date_to)
 
     for row in results:
-        cumulative_volume_bytes += row['total_archived_data_bytes']
-        volume_bytes = row['total_archived_data_bytes']
+        this_bytes = int(row['total_data_bytes'])
+        cumulative_volume_bytes += this_bytes
+
+        if not ingest_only:
+            # find row in deleted_results
+            for drow in deleted_results:
+                if row['reporting_year'] == drow['reporting_year'] and row['reporting_month'] == drow['reporting_month']:
+                    deleted_bytes = int(drow['deleted_bytes'])
+                    this_bytes -= deleted_bytes
+                    cumulative_volume_bytes -= deleted_bytes
+
+        volume_bytes = this_bytes
 
         # Check striding
         if row['reporting_month'] % stride_months == 0:
@@ -275,13 +309,13 @@ def do_plot_archive_volume_per_project(tap_service, date_from, date_to, title, f
                                          ORDER BY 3 DESC""")
 
     for row in results:
-        value_bytes = row['total_archived_data_bytes']
+        value_bytes = int(row['total_archived_data_bytes'])
 
         if slice_no >= max_slices:
             other_bytes += value_bytes
         else:
             x_values.append(bytes_to_terabytes(value_bytes))
-            labels.append(f"{row['projectid'].decode('utf-8')}-{row['projectshortname'].decode('utf-8')}")
+            labels.append(f"{row['projectid']}-{row['projectshortname']}")
 
         slice_no += 1
 
@@ -319,10 +353,10 @@ def do_plot_telescope_time_per_project(tap_service, date_from, date_to, title, f
 
     for row in results:
         if slice_no >= max_slices:
-            other_time += row['totaltime_hours']
+            other_time += int(row['totaltime_hours'])
         else:
-            labels.append(f"{row['projectid'].decode('utf-8')}-{row['projectshortname'].decode('utf-8')}")
-            x_values.append(row['totaltime_hours'])
+            labels.append(f"{row['projectid']}-{row['projectshortname']}")
+            x_values.append(int(row['totaltime_hours']))
 
         slice_no += 1
 
@@ -393,7 +427,10 @@ def run_stats():
 
     do_plot_archive_volume_per_month(mwa_tap_service, start_date, today,
                                      "MWA Archive Volume (all time)", True,
-                                     "mwa_archive_volume_all_time.png")
+                                     "mwa_archive_volume_all_time.png", False)
+    do_plot_archive_volume_per_month(mwa_tap_service, start_date, today,
+                                     "MWA Archive Ingest (all time)", True,
+                                     "mwa_archive_ingest_all_time.png", True)
     do_plot_archive_volume_per_project(mwa_tap_service, start_date, today,
                                        "MWA Archive Volume by Project (all time)",
                                        "mwa_archive_volume_by_project_all_time.png")
@@ -403,7 +440,10 @@ def run_stats():
 
     do_plot_archive_volume_per_month(mwa_tap_service, six_months_ago, today,
                                      "MWA Archive Net Growth (last 6 months)", False,
-                                     "mwa_archive_net_growth_last_6_months.png")
+                                     "mwa_archive_net_growth_last_6_months.png", False)
+    do_plot_archive_volume_per_month(mwa_tap_service, six_months_ago, today,
+                                     "MWA Archive Ingest (last 6 months)", False,
+                                     "mwa_archive_ingest_last_6_months.png", True)
     do_plot_archive_volume_per_project(mwa_tap_service, six_months_ago, today,
                                        "MWA Archive Volume by Project (last 6 months)",
                                        "mwa_archive_volume_by_project_last_6_months.png")
