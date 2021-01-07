@@ -256,6 +256,7 @@ def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cum
 
     for row in results:
         this_bytes = int(row['total_data_bytes'])
+        this_deleted_bytes = 0
         cumulative_volume_bytes += this_bytes
 
         if not ingest_only:
@@ -264,6 +265,7 @@ def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cum
                 if row['reporting_year'] == drow['reporting_year'] and row['reporting_month'] == drow['reporting_month']:
                     deleted_bytes = int(drow['deleted_bytes'])
                     this_bytes -= deleted_bytes
+                    this_deleted_bytes = deleted_bytes
                     cumulative_volume_bytes -= deleted_bytes
 
         volume_bytes = this_bytes
@@ -276,6 +278,28 @@ def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cum
                 y_axis.append(bytes_to_terabytes(cumulative_volume_bytes))
             else:
                 y_axis.append(bytes_to_terabytes(volume_bytes))
+
+        # Only dump this debug to the screen if we are including deleted data and in the year and qtrs we want
+        # and only if this code is being run on the full archive and not just 6 months worth
+        # This dump code is here because it is convenient - it should be moved into a seperate module really
+        dump_year_from = 2020
+        dump_year_to = 2020
+        dump_month_from = 9
+        dump_month_to = 12
+
+        if not ingest_only and \
+            (date_to - date_from).days > (31*6) and \
+            row['reporting_year'] >= dump_year_from and \
+            row['reporting_year'] <= dump_year_to and \
+            row['reporting_month'] >= dump_month_from and \
+            row['reporting_month'] <= dump_month_to:
+
+            print(row['reporting_year'],
+                  row['reporting_month'],
+                  bytes_to_terabytes(volume_bytes),
+                  bytes_to_terabytes(volume_bytes + this_deleted_bytes),
+                  bytes_to_terabytes(this_deleted_bytes),
+                  bytes_to_terabytes(cumulative_volume_bytes))
 
     volume_petabytes = bytes_to_petabytes(cumulative_volume_bytes)
 
