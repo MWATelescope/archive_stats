@@ -77,18 +77,18 @@ def dump_stats(vo_service, filename):
     print(f"Total time: { total_secs / 3600 } hours\n")
     print(f"Total deleted data: { bytes_to_petabytes(deleted_bytes) } PB\n")
 
-    results = do_query(vo_service, """SELECT 
-                                           SUM(total_archived_data_bytes) as total_archived_bytes   
-                                          FROM mwa.observation
-                                          WHERE dataqualityname = 'Marked for Delete'                        
-                                      """)
-
-    marked_for_delete_bytes = results[0]['total_archived_bytes']
-    if isdigit(marked_for_delete_bytes):
-        marked_for_delete_bytes = int(marked_for_delete_bytes)
-    else:
-        marked_for_delete_bytes = 0
-    print(f"Data marked for delete: { bytes_to_terabytes(marked_for_delete_bytes) } TB\n")
+    # results = do_query(vo_service, """SELECT
+    #                                        SUM(total_archived_data_bytes) as total_archived_bytes
+    #                                       FROM mwa.observation
+    #                                       WHERE dataqualityname = 'Marked for Delete'
+    #                                   """)
+    #
+    # marked_for_delete_bytes = results[0]['total_archived_bytes']
+    # if isdigit(marked_for_delete_bytes):
+    #     marked_for_delete_bytes = int(marked_for_delete_bytes)
+    # else:
+    #     marked_for_delete_bytes = 0
+    # print(f"Data marked for delete: { bytes_to_terabytes(marked_for_delete_bytes) } TB\n")
 
 
 def dump_stats_by_project(local_db_conn, filename):
