@@ -4,6 +4,8 @@ from datetime import datetime
 from contextlib import closing
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import colors
+from matplotlib.ticker import PercentFormatter
 
 
 def do_plot_histogram(local_db_conn, date_from, date_to, title, min_seconds=None, max_seconds=None):
@@ -30,13 +32,38 @@ def do_plot_histogram(local_db_conn, date_from, date_to, title, min_seconds=None
             value = row[0]
 
             if value >= min_seconds and value <= max_seconds:
-                x.append(row[0])
+                x.append(value / 60.0)
 
-    plt.hist(x, bins=nbins, normed=True)
-    plt.title(f"{title} = {date_from} - {date_to}")
-    plt.xlabel("Stage time (seconds)")
-    plt.ylabel("Count")
-    plt.show()
+    #plt.hist(x, bins=nbins)
+    #plt.title(f"{title} = {date_from} - {date_to}")
+    #plt.xlabel("Stage time (seconds)")
+    #plt.ylabel("Count")
+    #plt.savefig("plot.png")
+
+    fig, axs = plt.subplots(1, 2, tight_layout=True, figsize=(16, 8))
+
+    # N is the count in each bin, bins is the lower-limit of the bin
+    N, bins, patches = axs[0].hist(x, bins=nbins)
+
+    axs[1].hist(x, bins=nbins, density=True, cumulative=True)
+
+    # Now we format the y-axis to display percentage
+    axs[1].yaxis.set_major_formatter(PercentFormatter(xmax=1))
+    axs[0].set_xlabel("Staging time (minutes)")
+    axs[1].set_xlabel("Staging time (minutes)")
+    axs[0].set_xticks(np.arange(0, 60, 2))
+    for tick in axs[0].get_xticklabels():
+        tick.set_rotation(90)
+    axs[1].set_xticks(np.arange(0, 60, 2))
+    for tick in axs[1].get_xticklabels():
+        tick.set_rotation(90)
+    axs[0].set_ylabel("Successful stages")
+    axs[1].set_ylabel("Cumulative % of successful stages")
+    axs[0].set_title(f"{title} = {date_from} - {date_to}")
+    axs[1].set_title(f"{title} = {date_from} - {date_to}")
+    axs[0].grid(True)
+    axs[1].grid(True)
+    fig.savefig("plot.png")
 
 
 def create_table(local_db_conn):
@@ -117,14 +144,14 @@ if __name__ == "__main__":
     #
     local_db_conn = sqlite3.connect('mwa_staging_sqlite.db')
 
-    print("Creating table...")
+    #print("Creating table...")
     #create_table(local_db_conn)
 
-    print("Parsing log...")
+    #print("Parsing log...")
     #rows = parse_mwadmget_log("mwadmget.log", local_db_conn)
     #print(f"Parsed {rows} of staging times from log.")
 
-    date_from = datetime(2018, 1, 25)
-    date_to = datetime(2019, 1, 25)
+    date_from = datetime(2016, 8, 10)
+    date_to = datetime(2018, 3, 10)
     do_plot_histogram(local_db_conn, date_from, date_to, "Staging time historgram", min_seconds=3, max_seconds=3600)
     exit(0)
