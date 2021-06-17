@@ -2,3 +2,4 @@ numpy
 astropy
 pyvo
 matplotlib
+psycopg2-binary

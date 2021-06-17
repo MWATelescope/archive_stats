@@ -8,7 +8,9 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import csv
 import pyvo as vo
-from numpy.core.defchararray import isdigit
+import psycopg2.pool
+from psycopg2.extras import execute_values
+import base64
 
 DPI = 100
 
@@ -213,22 +215,37 @@ def clear_plots():
         plt.close(f)
 
 
-def get_deleted_data_by_month(tap_service, date_from, date_to):
+def get_deleted_data_by_month(mwa_db, date_from, date_to):
+    conn = None
+    results = None
 
-    results = do_query(tap_service, f"""SELECT 
-                                             date_part('year', date_trunc('day', modtime)) as reporting_year 
-                                            ,date_part('month', date_trunc('day', modtime)) as reporting_month                                             
-                                            ,SUM(deleted_size) as deleted_bytes
-                                        FROM mwa.obs_data_file
-                                        WHERE    
-                                             modtime BETWEEN '{date_from}' AND '{date_to}'
-                                        GROUP BY 1,2
-                                        ORDER BY 1,2""")
+    try:
+        conn = mwa_db.getconn()
+        cursor = conn.cursor()
+        print("Running big query to get deleted data stats per month... please wait!")
+        cursor.execute("""
+                        SELECT 
+                             date_part('year', date_trunc('day', deleted_timestamp)) as reporting_year 
+                            ,date_part('month', date_trunc('day', deleted_timestamp)) as reporting_month                                             
+                            ,SUM(size) as deleted_bytes
+                        FROM data_files
+                        WHERE    
+                             deleted_timestamp BETWEEN %s AND %s
+                        GROUP BY 1,2
+                        ORDER BY 1,2
+                       """, (date_from, date_to))
+
+        results = cursor.fetchall()
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(error)
+    finally:
+        if conn is not None:
+            mwa_db.putconn(conn)
 
     return results
 
 
-def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cumulative, filename, ingest_only):
+def do_plot_archive_volume_per_month(tap_service, mwa_db, date_from, date_to, title, cumulative, filename, ingest_only):
     clear_plots()
 
     x_axis = []
@@ -252,7 +269,7 @@ def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cum
                                          ORDER BY 1,2 """)
     deleted_results = None
     if not ingest_only:
-        deleted_results = get_deleted_data_by_month(tap_service, date_from, date_to)
+        deleted_results = get_deleted_data_by_month(mwa_db, date_from, date_to)
 
     for row in results:
         this_bytes = int(row['total_data_bytes'])
@@ -261,9 +278,12 @@ def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cum
 
         if not ingest_only:
             # find row in deleted_results
+            # col 0 = Reporting Year
+            # col 1 = Reporting Month
+            # col 2 = sum(data deleted bytes)
             for drow in deleted_results:
-                if row['reporting_year'] == drow['reporting_year'] and row['reporting_month'] == drow['reporting_month']:
-                    deleted_bytes = int(drow['deleted_bytes'])
+                if row['reporting_year'] == drow[0] and row['reporting_month'] == drow[1]:
+                    deleted_bytes = int(drow[2])
                     this_bytes -= deleted_bytes
                     this_deleted_bytes = deleted_bytes
                     cumulative_volume_bytes -= deleted_bytes
@@ -282,10 +302,10 @@ def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cum
         # Only dump this debug to the screen if we are including deleted data and in the year and qtrs we want
         # and only if this code is being run on the full archive and not just 6 months worth
         # This dump code is here because it is convenient - it should be moved into a seperate module really
-        dump_year_from = 2020
-        dump_year_to = 2020
-        dump_month_from = 9
-        dump_month_to = 12
+        dump_year_from = 2021
+        dump_year_to = 2021
+        dump_month_from = 1
+        dump_month_to = 3
 
         if not ingest_only and \
             (date_to - date_from).days > (31*6) and \
@@ -293,6 +313,7 @@ def do_plot_archive_volume_per_month(tap_service, date_from, date_to, title, cum
             row['reporting_year'] <= dump_year_to and \
             row['reporting_month'] >= dump_month_from and \
             row['reporting_month'] <= dump_month_to:
+            print("year, month, ingested-deleted, ingested, deleted, cuml archive volume(all in TB)")
 
             print(row['reporting_year'],
                   row['reporting_month'],
@@ -439,6 +460,14 @@ def run_stats():
     tap_url = config.get("MWA TAP", "url")
     mwa_tap_service = vo.dal.TAPService(tap_url)
 
+    mwa_db = psycopg2.pool.ThreadedConnectionPool(minconn=1,
+                                                  maxconn=2,
+                                                  host=config.get("MWA Database", "dbhost"),
+                                                  user=config.get("MWA Database", "dbuser"),
+                                                  database=config.get("MWA Database", "dbname"),
+                                                  password=config.get("MWA Database", "dbpass"),
+                                                  port=config.get("MWA Database", "dbport"))
+
     today = datetime.today()
     start_date = datetime(2006, 1, 1)
 
@@ -449,10 +478,10 @@ def run_stats():
     dump_monthly_stats(mwa_tap_service, "stats_by_month.csv")
     dump_stats_by_project(mwa_tap_service, "stats_by_project.csv")
 
-    do_plot_archive_volume_per_month(mwa_tap_service, start_date, today,
+    do_plot_archive_volume_per_month(mwa_tap_service, mwa_db, start_date, today,
                                      "MWA Archive Volume (all time)", True,
                                      "mwa_archive_volume_all_time.png", False)
-    do_plot_archive_volume_per_month(mwa_tap_service, start_date, today,
+    do_plot_archive_volume_per_month(mwa_tap_service, mwa_db, start_date, today,
                                      "MWA Archive Ingest (all time)", True,
                                      "mwa_archive_ingest_all_time.png", True)
     do_plot_archive_volume_per_project(mwa_tap_service, start_date, today,
@@ -462,10 +491,10 @@ def run_stats():
                                        "MWA Telescope Time (all time)",
                                        "mwa_telescope_time_all_time.png")
 
-    do_plot_archive_volume_per_month(mwa_tap_service, six_months_ago, today,
+    do_plot_archive_volume_per_month(mwa_tap_service, mwa_db, six_months_ago, today,
                                      "MWA Archive Net Growth (last 6 months)", False,
                                      "mwa_archive_net_growth_last_6_months.png", False)
-    do_plot_archive_volume_per_month(mwa_tap_service, six_months_ago, today,
+    do_plot_archive_volume_per_month(mwa_tap_service, mwa_db, six_months_ago, today,
                                      "MWA Archive Ingest (last 6 months)", False,
                                      "mwa_archive_ingest_last_6_months.png", True)
     do_plot_archive_volume_per_project(mwa_tap_service, six_months_ago, today,
