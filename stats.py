@@ -68,7 +68,7 @@ def get_acacia_usage(profile, endpoint_url) -> int:
     values = [(profile, bucket) for bucket in bucket_list]
 
     with mp.Pool(cpu_count) as pool:
-        results = [pool.starmap(run_mc_du, values)]
+        results = pool.starmap(run_mc_du, values)
 
     # bucket_size = sum(key.size for key in bucket.objects.all())
     for result in results:
@@ -104,13 +104,13 @@ def get_banksia_usage(profile, endpoint_url):
     banksia_values = [(profile, bucket) for bucket in banksia_buckets]
 
     with mp.Pool(cpu_count) as pool:
-        banksia_results = [pool.starmap(run_mc_du, banksia_values)]
+        banksia_results = pool.starmap(run_mc_du, banksia_values)
 
     for banksia_result in banksia_results:
         banksia_total_size += banksia_result
 
     with mp.Pool(cpu_count) as pool:
-        dmf_results = [pool.starmap(run_mc_du, dmf_values)]
+        dmf_results = pool.starmap(run_mc_du, dmf_values)
 
     for dmf_result in dmf_results:
         dmf_total_size += dmf_result
