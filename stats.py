@@ -54,6 +54,43 @@ def get_banksia_usage(profile, endpoint_url):
     return dmf_total_size, banksia_total_size
 
 
+def get_location_summary_bytes(db_conn):
+    """
+    Returns the bytes stored for dmf, acacia and banksia
+    from the database
+    """
+    results = do_query(
+        db_conn,
+        """SELECT
+            case
+            when location IN (1, 3) then
+                case bucket
+                when 'mwa01fs' then 'DMF'
+                when 'mwa02fs' then 'DMF'
+                when 'mwa03fs' then 'DMF'
+                when 'mwa04fs' then 'DMF'
+                when 'volt01fs' then 'DMF'
+                else 'Banksia' END
+            when location IN (2) then 'Acacia' END As Location
+            ,sum(size)
+            FROM data_files
+            WHERE deleted_timestamp is null and remote_archived=true
+            GROUP BY 1""",
+    )
+
+    if len(results) == 1:
+        row = results[0]
+
+        dmf = row["dmf"]
+        acacia = row["acacia"]
+        banksia = row["banksia"]
+    else:
+        print("Error wrong number of rows!")
+        exit(-1)
+
+    return dmf, acacia, banksia
+
+
 def do_query(vo_service, adql_statement):
     """Given a VO service object, run the ADQL and return the results"""
     results = vo_service.search(adql_statement)
@@ -628,30 +665,58 @@ def run_stats():
     six_months_ago = today - relativedelta(months=6)
 
     # Get acacia and banksia totals from S3
-    acacia_profile = config.get("S3", "acacia_profile")
-    acacia_endpoint_url = config.get("S3", "acacia_endpoint_url")
-    banksia_profile = config.get("S3", "banksia_profile")
-    banksia_endpoint_url = config.get("S3", "banksia_endpoint_url")
+    if config.get("S3", "use_acacia") == 1:
+        acacia_profile = config.get("S3", "acacia_profile")
+        acacia_endpoint_url = config.get("S3", "acacia_endpoint_url")
 
-    print("Getting stats from Acacia...")
-    acacia_bytes = get_acacia_usage(acacia_profile, acacia_endpoint_url)
+        print("Getting stats from Acacia...")
+        acacia_bytes = get_acacia_usage(acacia_profile, acacia_endpoint_url)
+    else:
+        print("Skipping stats from Acacia (use_acacia != 1)")
+        acacia_bytes = 0
 
-    print("Getting stats from Banksia...")
-    dmf_bytes, banksia_bytes = get_banksia_usage(
-        banksia_profile, banksia_endpoint_url
+    if config.get("S3", "use_banksia") == 1:
+        banksia_profile = config.get("S3", "banksia_profile")
+        banksia_endpoint_url = config.get("S3", "banksia_endpoint_url")
+
+        print("Getting stats from Banksia...")
+        dmf_bytes, banksia_bytes = get_banksia_usage(
+            banksia_profile, banksia_endpoint_url
+        )
+    else:
+        print("Skipping stats from Banksia (use_banksia != 1)")
+        dmf_bytes = 0
+        banksia_bytes = 0
+
+    print("Getting summary stats from database...")
+    (
+        db_dmf_bytes,
+        db_acacia_bytes,
+        db_banksia_bytes,
+    ) = get_location_summary_bytes(mwa_db)
+
+    print(
+        f"Acacia : {bytes_to_terabytes(acacia_bytes)} TB vs"
+        f" {bytes_to_terabytes(db_acacia_bytes)} TB"
     )
-
-    print(f"Acacia : {bytes_to_terabytes(acacia_bytes)} TB")
-    print(f"DMF    : {bytes_to_terabytes(dmf_bytes)} TB")
-    print(f"Banksia: {bytes_to_terabytes(banksia_bytes)} TB")
+    print(
+        f"DMF    : {bytes_to_terabytes(dmf_bytes)} TB vs"
+        f" {bytes_to_terabytes(db_dmf_bytes)} TB"
+    )
+    print(
+        f"Banksia: {bytes_to_terabytes(banksia_bytes)} TB vs"
+        f" {bytes_to_terabytes(db_banksia_bytes)} TB"
+    )
     print("------------------------------")
     print(
         f"Total Banksia   : {bytes_to_terabytes(dmf_bytes+banksia_bytes)} TB"
+        f" vs {bytes_to_terabytes(db_dmf_bytes + db_banksia_bytes)} TB"
     )
     print("------------------------------")
     print(
         "Total Pawsey LTS:"
-        f" {bytes_to_terabytes(acacia_bytes +dmf_bytes+banksia_bytes)} TB"
+        f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes)} TB vs"
+        f" {bytes_to_terabytes(db_acacia_bytes + db_dmf_bytes + db_banksia_bytes)} TB"
     )
 
     # Either way show whats in the db
