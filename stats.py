@@ -683,7 +683,7 @@ def run_stats():
     six_months_ago = today - relativedelta(months=6)
 
     # Get acacia and banksia totals from S3
-    if config.get("S3", "use_acacia") == 1:
+    if config.getint("S3", "use_acacia") == 1:
         acacia_profile = config.get("S3", "acacia_profile")
         acacia_endpoint_url = config.get("S3", "acacia_endpoint_url")
 
@@ -693,7 +693,7 @@ def run_stats():
         print("Skipping stats from Acacia (use_acacia != 1)")
         acacia_bytes = 0
 
-    if config.get("S3", "use_banksia") == 1:
+    if config.getint("S3", "use_banksia") == 1:
         banksia_profile = config.get("S3", "banksia_profile")
         banksia_endpoint_url = config.get("S3", "banksia_endpoint_url")
 
