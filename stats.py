@@ -1,5 +1,8 @@
 """This module is used to provide overall storage stats for the MWA Archive"""
+import json
 import os
+import multiprocessing as mp
+import subprocess
 import time
 from configparser import ConfigParser
 from datetime import datetime
@@ -15,19 +18,62 @@ import matplotlib.pyplot as plt
 DPI = 100
 
 
+def get_s3_resource(profile, endpoint_url) -> boto3.resource:
+    """Given a profile and endpoint_url return a resource"""
+    session = boto3.Session(profile_name=profile)
+    return session.resource("s3", endpoint_url=endpoint_url)
+
+
+def run_mc_du(profile: str, bucket_name: str) -> int:
+    """Runs mc and appends output to filename"""
+    cmd = f"/home/gsleap/mc du {profile}/{bucket_name} --json"
+
+    json_output = subprocess.run(
+        cmd,
+        check=True,
+        capture_output=True,
+        shell=True,
+    ).stdout.decode("utf-8")
+
+    mc_output = json.loads(json_output)
+
+    # Example output:
+    # ./mc du banksia/ingesttest --json
+    # {
+    # "prefix": "ingesttest",
+    # "size": 8589934592,
+    # "objects": 1,
+    # "status": "success",
+    # "isVersions": false
+    # }
+    size_bytes = int(mc_output["size"])
+
+    print(f"{cmd} returned {size_bytes} bytes")
+
+    return size_bytes
+
+
 def get_acacia_usage(profile, endpoint_url) -> int:
     """
     Returns the bytes used from the S3 endpoint
     """
-    session = boto3.Session(profile_name=profile)
-    s3_resource = session.resource("s3", endpoint_url=endpoint_url)
+    cpu_count = mp.cpu_count()
+    print(f"Setting number of simultaneous mc processes to {cpu_count}.")
 
     total_size = 0
 
-    for bucket in s3_resource.buckets.all():
-        bucket_size = sum(key.size for key in bucket.objects.all())
-        total_size += bucket_size
-        print(f"{bucket.name} = {bucket_size}")
+    s3_resource = get_s3_resource(profile, endpoint_url)
+
+    bucket_list = [bucket.name for bucket in s3_resource.buckets.all()]
+    values = [(profile, bucket) for bucket in bucket_list]
+
+    with mp.Pool(cpu_count) as pool:
+        results = [pool.starmap(run_mc_du, values)]
+
+    # bucket_size = sum(key.size for key in bucket.objects.all())
+    for result in results:
+        total_size += result
+
     return total_size
 
 
@@ -36,20 +82,38 @@ def get_banksia_usage(profile, endpoint_url):
     Returns the bytes used from the S3 endpoint
     as DMF, banksia
     """
-    session = boto3.Session(profile_name=profile)
-    s3_resource = session.resource("s3", endpoint_url=endpoint_url)
+    cpu_count = mp.cpu_count()
+    print(f"Setting number of simultaneous mc processes to {cpu_count}.")
 
     dmf_total_size = 0
     banksia_total_size = 0
 
-    for bucket in s3_resource.buckets.all():
-        bucket_size = sum(key.size for key in bucket.objects.all())
-        if "mwaingest" in bucket.name:
-            banksia_total_size += bucket_size
-            print(f"Banksia {bucket.name} = {bucket_size}")
+    s3_resource = get_s3_resource(profile, endpoint_url)
+
+    bucket_list = [bucket.name for bucket in s3_resource.buckets.all()]
+    dmf_buckets = []
+    banksia_buckets = []
+
+    for bucket in bucket_list:
+        if "mwaingest" in bucket:
+            banksia_buckets.append(bucket)
         else:
-            dmf_total_size += bucket_size
-            print(f"DMF {bucket.name} = {bucket_size}")
+            dmf_buckets.append(bucket)
+
+    dmf_values = [(profile, bucket) for bucket in dmf_buckets]
+    banksia_values = [(profile, bucket) for bucket in banksia_buckets]
+
+    with mp.Pool(cpu_count) as pool:
+        banksia_results = [pool.starmap(run_mc_du, banksia_values)]
+
+    for banksia_result in banksia_results:
+        banksia_total_size += banksia_result
+
+    with mp.Pool(cpu_count) as pool:
+        dmf_results = [pool.starmap(run_mc_du, dmf_values)]
+
+    for dmf_result in dmf_results:
+        dmf_total_size += dmf_result
 
     return dmf_total_size, banksia_total_size
 
