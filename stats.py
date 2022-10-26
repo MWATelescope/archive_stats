@@ -1,28 +1,70 @@
-# Python 3
-from configparser import ConfigParser
-import numpy as np
-import matplotlib.pyplot as plt
+"""This module is used to provide overall storage stats for the MWA Archive"""
 import os
 import time
+from configparser import ConfigParser
 from datetime import datetime
-from dateutil.relativedelta import relativedelta
 import csv
+import boto3
 import pyvo as vo
 import psycopg2.pool
+from dateutil.relativedelta import relativedelta
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 DPI = 100
 
 
+def get_acacia_usage(profile, endpoint_url) -> int:
+    """
+    Returns the bytes used from the S3 endpoint
+    """
+    session = boto3.Session(profile_name=profile)
+    s3_resource = session.resource("s3", endpoint_url=endpoint_url)
+
+    total_size = 0
+
+    for bucket in s3_resource.buckets.all():
+        bucket_size = sum(key.size for key in bucket.objects.all())
+        total_size += bucket_size
+        print(f"{bucket.name} = {bucket_size}")
+    return total_size
+
+
+def get_banksia_usage(profile, endpoint_url):
+    """
+    Returns the bytes used from the S3 endpoint
+    as DMF, banksia
+    """
+    session = boto3.Session(profile_name=profile)
+    s3_resource = session.resource("s3", endpoint_url=endpoint_url)
+
+    dmf_total_size = 0
+    banksia_total_size = 0
+
+    for bucket in s3_resource.buckets.all():
+        bucket_size = sum(key.size for key in bucket.objects.all())
+        if "mwaingest" in bucket.name:
+            banksia_total_size += bucket_size
+            print(f"Banksia {bucket.name} = {bucket_size}")
+        else:
+            dmf_total_size += bucket_size
+            print(f"DMF {bucket.name} = {bucket_size}")
+
+    return dmf_total_size, banksia_total_size
+
+
 def do_query(vo_service, adql_statement):
+    """Given a VO service object, run the ADQL and return the results"""
     results = vo_service.search(adql_statement)
     return results
 
 
 def dump_stats(vo_service, filename):
+    """Run an ADQL query to get stats and write them to a CSV file"""
     i = 0
 
-    with open(filename, mode="w") as stats_csv_file:
+    with open(filename, mode="w", encoding="utf-8") as stats_csv_file:
         stats_csv_writer = csv.writer(
             stats_csv_file,
             delimiter=",",
@@ -93,16 +135,17 @@ def dump_stats(vo_service, filename):
                 )
             )
 
-    print("{0} rows written to {1}.\n".format(i, filename))
+    print(f"{i} rows written to {filename}.\n")
     print(f"Total data: { bytes_to_petabytes(total_bytes) } PB\n")
     print(f"Total time: { total_secs / 3600 } hours\n")
     print(f"Total deleted data: { bytes_to_petabytes(deleted_bytes) } PB\n")
 
 
 def dump_stats_by_project(local_db_conn, filename):
+    """Dumps stats grouped by project to a CSV file"""
     i = 0
 
-    with open(filename, mode="w") as stats_csv_file:
+    with open(filename, mode="w", encoding="utf-8") as stats_csv_file:
         stats_csv_writer = csv.writer(
             stats_csv_file,
             delimiter=",",
@@ -144,13 +187,14 @@ def dump_stats_by_project(local_db_conn, filename):
                 )
             )
 
-    print("{0} rows written to {1}.\n".format(i, filename))
+    print(f"{i} rows written to {filename}.\n")
 
 
 def dump_monthly_stats(vo_service, filename):
+    """Dump stats by month to a CSV file"""
     i = 0
 
-    with open(filename, mode="w") as stats_csv_file:
+    with open(filename, mode="w", encoding="utf-8") as stats_csv_file:
         stats_csv_writer = csv.writer(
             stats_csv_file,
             delimiter=",",
@@ -195,10 +239,11 @@ def dump_monthly_stats(vo_service, filename):
 
             stats_csv_writer.writerow(csv_row)
 
-        print("{0} rows written to {1}.\n".format(i, filename))
+        print(f"{i} rows written to {filename}.\n")
 
 
 def get_filetype_by_id(filetype_id):
+    """Return a filetype name given an id"""
     types = [
         "Unknown (0)",
         "Raw VSIB burst",
@@ -225,6 +270,7 @@ def get_filetype_by_id(filetype_id):
 
 
 def get_duty_cycle(hours, available_hours):
+    """Calculate duty cycle"""
     if available_hours > 0:
         return hours / available_hours
     else:
@@ -232,6 +278,7 @@ def get_duty_cycle(hours, available_hours):
 
 
 def get_available_hours(year: int, month: int):
+    """Calculate available hours in a month"""
     start_date = datetime(year, month, 1)
 
     # get end date.
@@ -247,14 +294,16 @@ def get_available_hours(year: int, month: int):
 
 
 def clear_plots():
-    f = plt.figure()
+    """Clear plots"""
+    fig = plt.figure()
 
-    if f:
-        f.clear()
-        plt.close(f)
+    if fig:
+        fig.clear()
+        plt.close(fig)
 
 
 def get_deleted_data_by_month(mwa_db, date_from, date_to):
+    """Get the deleted data by month from a query"""
     conn = None
     results = None
 
@@ -304,6 +353,7 @@ def do_plot_archive_volume_per_month(
     dump_month_from,
     dump_month_to,
 ):
+    """Plot archive volume per month"""
     clear_plots()
 
     x_axis = []
@@ -357,9 +407,7 @@ def do_plot_archive_volume_per_month(
         # Check striding
         if row["reporting_month"] % stride_months == 0:
             x_axis.append(
-                "{0:d}-{1:02d}".format(
-                    int(row["reporting_year"]), int(row["reporting_month"])
-                )
+                f'{int(row["reporting_year"]):d}-{int(row["reporting_month"]):02d}'
             )
 
             if cumulative:
@@ -367,9 +415,10 @@ def do_plot_archive_volume_per_month(
             else:
                 y_axis.append(bytes_to_terabytes(volume_bytes))
 
-        # Only dump this debug to the screen if we are including deleted data and in the year and qtrs we want
-        # and only if this code is being run on the full archive and not just 6 months worth
-        # This dump code is here because it is convenient - it should be moved into a seperate module really
+        # Only dump this debug to the screen if we are including deleted data and
+        # in the year and qtrs we want and only if this code is being run on the
+        # full archive and not just 6 months worth. This dump code is here
+        # because it is convenient - it should be moved into a seperate module really
         if (
             not ingest_only
             and (date_to - date_from).days > (31 * 6)
@@ -394,12 +443,11 @@ def do_plot_archive_volume_per_month(
 
     volume_petabytes = bytes_to_petabytes(cumulative_volume_bytes)
 
-    fig, axis = plt.subplots()
+    fig, _ = plt.subplots()
     plt.bar(x_axis, y_axis)
     plt.title(
-        "{0} = {1:.2f} PB (as at {2})".format(
-            title, volume_petabytes, time.strftime("%d-%b-%Y")
-        )
+        f"{title} = {volume_petabytes:.2f} PB (as at"
+        f" {time.strftime('%d-%b-%Y')})"
     )
     plt.xlabel("Time")
     plt.xticks(rotation=90)
@@ -411,6 +459,7 @@ def do_plot_archive_volume_per_month(
 def do_plot_archive_volume_per_project(
     tap_service, date_from, date_to, title, filename
 ):
+    """Plot archive volume per project"""
     clear_plots()
 
     labels = []
@@ -456,7 +505,7 @@ def do_plot_archive_volume_per_project(
     )
     axis.axis("equal")
 
-    plt.title("{0} (as at {1})".format(title, time.strftime("%d-%b-%Y")))
+    plt.title(f"{title} (as at {time.strftime('%d-%b-%Y')})")
     fig.set_size_inches(18.5, 10.5)
     plt.savefig(
         filename,
@@ -467,6 +516,7 @@ def do_plot_archive_volume_per_project(
 def do_plot_telescope_time_per_project(
     tap_service, date_from, date_to, title, filename
 ):
+    """Plot telescope time per project"""
     clear_plots()
 
     labels = []
@@ -509,32 +559,33 @@ def do_plot_telescope_time_per_project(
         startangle=0,
     )
     axis.axis("equal")
-    plt.title(
-        "{0} by Project (as at {1})".format(title, time.strftime("%d-%b-%Y"))
-    )
+    plt.title(f"{title} by Project (as at {time.strftime('%d-%b-%Y')})")
     fig.set_size_inches(18.5, 10.5)
     plt.savefig(filename, dpi=DPI)
 
 
 def pie_hours_format(pct, allvals):
+    """Format percentage labels for pie chart"""
     absolute = int(pct / 100.0 * float(np.sum(allvals)))
 
     if pct < 5:
-        return "{:.1f}%".format(pct)
+        return f"{pct:.1f}%"
     else:
-        return "{:.1f}%\n({:d} hrs)".format(pct, absolute)
+        return f"{pct:.1f}%\n({absolute:d} hrs)"
 
 
 def pie_volume_format(pct, allvals):
+    """Format volume"""
     absolute = int(pct / 100.0 * float(np.sum(allvals)))
 
     if pct < 5:
-        return "{:.1f}%".format(pct)
+        return f"{pct:.1f}%"
     else:
-        return "{:.1f}%\n({:d} TB)".format(pct, absolute)
+        return f"{pct:.1f}%\n({absolute:d} TB)"
 
 
 def bytes_to_terabytes(bytes_value):
+    """Convert bytes to TB"""
     if bytes_value is None:
         return 0.0
     else:
@@ -542,6 +593,7 @@ def bytes_to_terabytes(bytes_value):
 
 
 def bytes_to_petabytes(bytes_value):
+    """Convert bytes to PB"""
     if bytes_value is None:
         return 0.0
     else:
@@ -551,9 +603,8 @@ def bytes_to_petabytes(bytes_value):
 
 
 def run_stats():
-    #
+    """Main function"""
     # Usage: python stats.py
-    #
     app_path = os.path.dirname(os.path.realpath(__file__))
     config = ConfigParser()
     config.read(app_path + "/" + "config.cfg")
@@ -576,6 +627,33 @@ def run_stats():
 
     six_months_ago = today - relativedelta(months=6)
 
+    # Get acacia and banksia totals from S3
+    acacia_profile = config.get("S3", "acacia_profile")
+    acacia_endpoint_url = config.get("S3", "acacia_endpoint_url")
+    banksia_profile = config.get("S3", "banksia_profile")
+    banksia_endpoint_url = config.get("S3", "banksia_endpoint_url")
+
+    print("Getting stats from Acacia...")
+    acacia_bytes = get_acacia_usage(acacia_profile, acacia_endpoint_url)
+
+    print("Getting stats from Banksia...")
+    dmf_bytes, banksia_bytes = get_banksia_usage(
+        banksia_profile, banksia_endpoint_url
+    )
+
+    print(f"Acacia : {bytes_to_terabytes(acacia_bytes)} TB")
+    print(f"DMF    : {bytes_to_terabytes(dmf_bytes)} TB")
+    print(f"Banksia: {bytes_to_terabytes(banksia_bytes)} TB")
+    print("------------------------------")
+    print(
+        f"Total Banksia   : {bytes_to_terabytes(dmf_bytes+banksia_bytes)} TB"
+    )
+    print("------------------------------")
+    print(
+        "Total Pawsey LTS:"
+        f" {bytes_to_terabytes(acacia_bytes +dmf_bytes+banksia_bytes)} TB"
+    )
+
     # Either way show whats in the db
     dump_stats(mwa_tap_service, "stats.csv")
     dump_monthly_stats(mwa_tap_service, "stats_by_month.csv")
@@ -584,8 +662,8 @@ def run_stats():
     # special stats get dumped for the quarterly report to AAL
     dump_year_from = 2022
     dump_year_to = 2022
-    dump_month_from = 1
-    dump_month_to = 7
+    dump_month_from = 7
+    dump_month_to = 12
 
     do_plot_archive_volume_per_month(
         mwa_tap_service,

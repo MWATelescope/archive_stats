@@ -3,3 +3,4 @@ astropy
 pyvo
 matplotlib
 psycopg2-binary
+boto3

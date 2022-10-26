@@ -1,4 +1,7 @@
 # archive_stats
 Tools and scripts for MWA Archive stats collection
 
-NOTE: this required direct database access to the MWA metadata database. In the near future, this code will use a public VO TAP  service instead allowing the code to be run from anywhere, by anyone.
+NOTE: this required direct database access to the MWA metadata database, the MWA VO TAP service and the Pawsey Acacia and Banksia endpoints.
+
+# usage
+```python stats.py```
