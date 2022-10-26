@@ -54,14 +54,20 @@ def get_banksia_usage(profile, endpoint_url):
     return dmf_total_size, banksia_total_size
 
 
-def get_location_summary_bytes(db_conn):
+def get_location_summary_bytes(mwa_db):
     """
     Returns the bytes stored for dmf, acacia and banksia
     from the database
     """
-    results = do_query(
-        db_conn,
-        """SELECT
+    conn = None
+    results = None
+
+    try:
+        conn = mwa_db.getconn()
+        cursor = conn.cursor()
+        print("Running big query to get location stats... please wait!")
+        cursor.execute(
+            """SELECT
             case
             when location IN (1, 3) then
                 case bucket
@@ -76,14 +82,26 @@ def get_location_summary_bytes(db_conn):
             FROM data_files
             WHERE deleted_timestamp is null and remote_archived=true
             GROUP BY 1""",
-    )
+        )
 
-    if len(results) == 1:
-        row = results[0]
+        results = cursor.fetchall()
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(error)
+    finally:
+        if conn is not None:
+            mwa_db.putconn(conn)
 
-        dmf = row["dmf"]
-        acacia = row["acacia"]
-        banksia = row["banksia"]
+    if len(results) == 3:
+        for row in results:
+            if row[0] == "DMF":
+                dmf = row[1]
+            elif row[0] == "Acacia":
+                acacia = row[1]
+            elif row[0] == "Banksia":
+                banksia = row[1]
+            else:
+                print("Unexpected value!")
+                exit(-1)
     else:
         print("Error wrong number of rows!")
         exit(-1)
