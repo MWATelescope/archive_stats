@@ -28,6 +28,8 @@ def run_mc_du(profile: str, bucket_name: str) -> int:
     """Runs mc and appends output to filename"""
     cmd = f"/home/gsleap/mc du {profile}/{bucket_name} --json"
 
+    print(f"{cmd}...\r")
+
     json_output = subprocess.run(
         cmd,
         check=True,
@@ -48,7 +50,7 @@ def run_mc_du(profile: str, bucket_name: str) -> int:
     # }
     size_bytes = int(mc_output["size"])
 
-    print(f"{cmd} returned {size_bytes} bytes")
+    print(f" == {size_bytes} bytes")
 
     return size_bytes
 
@@ -780,7 +782,7 @@ def run_stats(config_filename):
     ) = get_location_summary_bytes(mwa_db)
 
     print(
-        f"Acacia : {bytes_to_terabytes(acacia_bytes)} TB vs"
+        f"Acacia : {bytes_to_terabytes(acacia_bytes):.} TB vs"
         f" {bytes_to_terabytes(db_acacia_bytes)} TB"
     )
     print(
@@ -803,29 +805,32 @@ def run_stats(config_filename):
         f" {bytes_to_terabytes(db_acacia_bytes + db_dmf_bytes + db_banksia_bytes)} TB"
     )
     print("--------------------------------------------------")
-    acacia_percent_used = acacia_bytes / acacia_quota_bytes
+    acacia_percent_used = (acacia_bytes / acacia_quota_bytes) * 100.0
     print(
         "Acacia Quota Used:"
         f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes)} TB /"
         f" {bytes_to_terabytes(acacia_quota_bytes)} TB == "
         f" {acacia_percent_used:.1f} % used"
     )
-    banksia_percent_used = (dmf_bytes + banksia_bytes) / banksia_quota_bytes
+    banksia_percent_used = (
+        (dmf_bytes + banksia_bytes) / banksia_quota_bytes
+    ) * 100.0
     print(
         "Banksia Quota Used:"
         f" {bytes_to_terabytes(dmf_bytes + banksia_bytes)} TB /"
         f" {bytes_to_terabytes(banksia_quota_bytes)} TB == "
         f" {banksia_percent_used:.1f} % used"
     )
-    lts_percent_used = (acacia_bytes + dmf_bytes + banksia_bytes) / (
-        acacia_quota_bytes + banksia_quota_bytes
-    )
+    lts_percent_used = (
+        (acacia_bytes + dmf_bytes + banksia_bytes)
+        / (acacia_quota_bytes + banksia_quota_bytes)
+    ) * 100
     print(
         "Pawsey Quota Used:"
         f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes)} TB /"
         f" {bytes_to_terabytes(acacia_quota_bytes + banksia_quota_bytes)} TB"
         " == "
-        f"{lts_percent_used:.1f} %"
+        f"{lts_percent_used:.1f} % used"
     )
 
     # Either way show whats in the db
