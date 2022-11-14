@@ -782,7 +782,7 @@ def run_stats(config_filename):
     ) = get_location_summary_bytes(mwa_db)
 
     print(
-        f"Acacia : {bytes_to_terabytes(acacia_bytes):.} TB vs"
+        f"Acacia : {bytes_to_terabytes(acacia_bytes)} TB vs"
         f" {bytes_to_terabytes(db_acacia_bytes)} TB"
     )
     print(
