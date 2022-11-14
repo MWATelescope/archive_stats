@@ -727,8 +727,8 @@ def run_stats(config_filename):
     config = ConfigParser()
     config.read(config_filename)
 
-    acacia_quota_bytes = config.get("asvo_stats", "acacia_quota_bytes")
-    banksia_quota_bytes = config.get("asvo_stats", "banksia_quota_bytes")
+    acacia_quota_bytes = config.getint("asvo_stats", "acacia_quota_bytes")
+    banksia_quota_bytes = config.getint("asvo_stats", "banksia_quota_bytes")
 
     tap_url = config.get("MWA TAP", "url")
     mwa_tap_service = vo.dal.TAPService(tap_url)
@@ -740,7 +740,7 @@ def run_stats(config_filename):
         user=config.get("MWA Database", "dbuser"),
         database=config.get("MWA Database", "dbname"),
         password=config.get("MWA Database", "dbpass"),
-        port=config.get("MWA Database", "dbport"),
+        port=config.getint("MWA Database", "dbport"),
     )
 
     today = datetime.today()
