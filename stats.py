@@ -1,6 +1,6 @@
 """This module is used to provide overall storage stats for the MWA Archive"""
+import argparse
 import json
-import os
 import multiprocessing as mp
 import subprocess
 import time
@@ -721,12 +721,14 @@ def bytes_to_petabytes(bytes_value):
         )
 
 
-def run_stats():
+def run_stats(config_filename):
     """Main function"""
-    # Usage: python stats.py
-    app_path = os.path.dirname(os.path.realpath(__file__))
+    # Usage: python stats.py --cfg=path/to/config/file
     config = ConfigParser()
-    config.read(app_path + "/" + "config.cfg")
+    config.read(config_filename)
+
+    acacia_quota_bytes = config.get("asvo_stats", "acacia_quota_bytes")
+    banksia_quota_bytes = config.get("asvo_stats", "banksia_quota_bytes")
 
     tap_url = config.get("MWA TAP", "url")
     mwa_tap_service = vo.dal.TAPService(tap_url)
@@ -789,16 +791,41 @@ def run_stats():
         f"Banksia: {bytes_to_terabytes(banksia_bytes)} TB vs"
         f" {bytes_to_terabytes(db_banksia_bytes)} TB"
     )
-    print("------------------------------")
+    print("--------------------------------------------------")
     print(
         f"Total Banksia   : {bytes_to_terabytes(dmf_bytes+banksia_bytes)} TB"
         f" vs {bytes_to_terabytes(db_dmf_bytes + db_banksia_bytes)} TB"
     )
-    print("------------------------------")
+    print("--------------------------------------------------")
     print(
         "Total Pawsey LTS:"
         f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes)} TB vs"
         f" {bytes_to_terabytes(db_acacia_bytes + db_dmf_bytes + db_banksia_bytes)} TB"
+    )
+    print("--------------------------------------------------")
+    acacia_percent_used = acacia_bytes / acacia_quota_bytes
+    print(
+        "Acacia Quota Used:"
+        f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes)} TB /"
+        f" {bytes_to_terabytes(acacia_quota_bytes)} TB == "
+        f" {acacia_percent_used:.1f} % used"
+    )
+    banksia_percent_used = (dmf_bytes + banksia_bytes) / banksia_quota_bytes
+    print(
+        "Banksia Quota Used:"
+        f" {bytes_to_terabytes(dmf_bytes + banksia_bytes)} TB /"
+        f" {bytes_to_terabytes(banksia_quota_bytes)} TB == "
+        f" {banksia_percent_used:.1f} % used"
+    )
+    lts_percent_used = (acacia_bytes + dmf_bytes + banksia_bytes) / (
+        acacia_quota_bytes + banksia_quota_bytes
+    )
+    print(
+        "Pawsey Quota Used:"
+        f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes)} TB /"
+        f" {bytes_to_terabytes(acacia_quota_bytes + banksia_quota_bytes)} TB"
+        " == "
+        f"{lts_percent_used:.1f} %"
     )
 
     # Either way show whats in the db
@@ -900,4 +927,19 @@ def run_stats():
 
 
 if __name__ == "__main__":
-    run_stats()
+    # Get command line args
+    parser = argparse.ArgumentParser()
+    parser.description = (
+        "archive_stats calculates usage from info dervied"
+        " from the MWA database, TAP service, Acacia and"
+        " Banksia. Needs to be run from a machine with access"
+        " to Acacia/Banksia and the MWA database.\n"
+    )
+
+    parser.add_argument(
+        "-c", "--cfg", required=True, help="Configuration file location.\n"
+    )
+
+    args = vars(parser.parse_args())
+
+    run_stats(args["cfg"])
