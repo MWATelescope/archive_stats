@@ -28,7 +28,7 @@ def run_mc_du(profile: str, bucket_name: str) -> int:
     """Runs mc and appends output to filename"""
     cmd = f"/home/gsleap/mc du {profile}/{bucket_name} --json"
 
-    print(f"{cmd}...\r")
+    print(f"{cmd}...", end="")
 
     json_output = subprocess.run(
         cmd,
