@@ -82,17 +82,21 @@ def get_acacia_usage(profile, endpoint_url) -> int:
     return total_size
 
 
-def randomise_banksia_profile(profile) -> str:
-    """Replaces the $ in the profile (if any) with a
+def randomise_banksia_vss(string_with_dollar: str) -> str:
+    """Replaces the $ in the string_with_dollar (if any) with a
     randomly chose VSS number"""
     vss = random.randint(1, 6)
-    return profile.replace("$", str(vss))
+    return string_with_dollar.replace("$", str(vss))
 
 
-def get_banksia_usage(profile, endpoint_url):
+def get_banksia_usage(aws_profile, endpoint_url):
     """
     Returns the bytes used from the S3 endpoint
     as DMF, banksia
+
+    aws_profile is a profile in ~/.aws/config
+    not to be confused with the minIO client profile which is
+    in .mc/config.json
     """
     cpu_count = mp.cpu_count()
     print(f"Setting number of simultaneous mc processes to {cpu_count}.")
@@ -100,9 +104,9 @@ def get_banksia_usage(profile, endpoint_url):
     dmf_total_size = 0
     banksia_total_size = 0
 
-    profile = randomise_banksia_profile(profile)
-
-    s3_resource = get_s3_resource(profile, endpoint_url)
+    s3_resource = get_s3_resource(
+        aws_profile, randomise_banksia_vss(endpoint_url)
+    )
 
     bucket_list = [bucket.name for bucket in s3_resource.buckets.all()]
     dmf_buckets = []
@@ -122,11 +126,16 @@ def get_banksia_usage(profile, endpoint_url):
         else:
             print(f"Skipping bucket {bucket}")
 
+    # here we are creating a list of tuples to pass to the mp.Pool to execute
+    # in THIS case the "profile" is a MinIO profile! In mc, the profile defines
+    # both the credentials AND the endpoint, so here we want to randomise the profile
+    # so we run mc against different VSS's so we don't kill Banksia!
     dmf_values = [
-        (randomise_banksia_profile(profile), bucket) for bucket in dmf_buckets
+        (randomise_banksia_vss(f"{aws_profile}$"), bucket)
+        for bucket in dmf_buckets
     ]
     banksia_values = [
-        (randomise_banksia_profile(profile), bucket)
+        (randomise_banksia_vss(f"{aws_profile}$"), bucket)
         for bucket in banksia_buckets
     ]
 
