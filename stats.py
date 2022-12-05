@@ -86,7 +86,7 @@ def randomise_banksia_profile(profile) -> str:
     """Replaces the $ in the profile (if any) with a
     randomly chose VSS number"""
     vss = random.randint(1, 6)
-    return profile.replace("$", vss)
+    return profile.replace("$", str(vss))
 
 
 def get_banksia_usage(profile, endpoint_url):
