@@ -100,7 +100,9 @@ def get_banksia_usage(profile, endpoint_url):
     dmf_total_size = 0
     banksia_total_size = 0
 
-    s3_resource = get_s3_resource(profile, endpoint_url)
+    s3_resource = get_s3_resource(
+        randomise_banksia_profile(profile), endpoint_url
+    )
 
     bucket_list = [bucket.name for bucket in s3_resource.buckets.all()]
     dmf_buckets = []
