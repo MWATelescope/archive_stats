@@ -28,7 +28,7 @@ def run_mc_du(profile: str, bucket_name: str) -> int:
     """Runs mc and appends output to filename"""
     cmd = f"/home/gsleap/mc du {profile}/{bucket_name} --json"
 
-    print(f"{cmd}...", end="")
+    print(f"{cmd}...")
 
     json_output = subprocess.run(
         cmd,
@@ -50,7 +50,7 @@ def run_mc_du(profile: str, bucket_name: str) -> int:
     # }
     size_bytes = int(mc_output["size"])
 
-    print(f" == {size_bytes} bytes")
+    print(f"{cmd} == {size_bytes} bytes")
 
     return size_bytes
 
@@ -97,10 +97,18 @@ def get_banksia_usage(profile, endpoint_url):
     banksia_buckets = []
 
     for bucket in bucket_list:
-        if "mwaingest" in bucket:
+        if (
+            ("mwa01fs" in bucket)
+            or ("mwa02fs" in bucket)
+            or ("mwa03fs" in bucket)
+            or ("mwa04fs" in bucket)
+            or ("volt01fs" in bucket)
+        ):
+            dmf_buckets.append(bucket)
+        elif "mwaingest" in bucket:
             banksia_buckets.append(bucket)
         else:
-            dmf_buckets.append(bucket)
+            print(f"Skipping bucket {bucket}")
 
     dmf_values = [(profile, bucket) for bucket in dmf_buckets]
     banksia_values = [(profile, bucket) for bucket in banksia_buckets]
