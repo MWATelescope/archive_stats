@@ -2,6 +2,7 @@
 import argparse
 import json
 import multiprocessing as mp
+import random
 import subprocess
 import time
 from configparser import ConfigParser
@@ -50,7 +51,9 @@ def run_mc_du(profile: str, bucket_name: str) -> int:
     # }
     size_bytes = int(mc_output["size"])
 
-    print(f"{cmd} == {size_bytes} bytes")
+    print(
+        f"{cmd} == {size_bytes} bytes {bytes_to_terabytes(size_bytes):.3f} TB"
+    )
 
     return size_bytes
 
@@ -77,6 +80,13 @@ def get_acacia_usage(profile, endpoint_url) -> int:
         total_size += result
 
     return total_size
+
+
+def randomise_banksia_profile(profile) -> str:
+    """Replaces the $ in the profile (if any) with a
+    randomly chose VSS number"""
+    vss = random.randint(1, 6)
+    return profile.replace("$", vss)
 
 
 def get_banksia_usage(profile, endpoint_url):
@@ -110,8 +120,13 @@ def get_banksia_usage(profile, endpoint_url):
         else:
             print(f"Skipping bucket {bucket}")
 
-    dmf_values = [(profile, bucket) for bucket in dmf_buckets]
-    banksia_values = [(profile, bucket) for bucket in banksia_buckets]
+    dmf_values = [
+        (randomise_banksia_profile(profile), bucket) for bucket in dmf_buckets
+    ]
+    banksia_values = [
+        (randomise_banksia_profile(profile), bucket)
+        for bucket in banksia_buckets
+    ]
 
     with mp.Pool(cpu_count) as pool:
         banksia_results = pool.starmap(run_mc_du, banksia_values)
