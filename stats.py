@@ -603,12 +603,10 @@ def do_plot_archive_volume_per_month(
             )
 
             logger.info(
-                row["reporting_year"],
-                row["reporting_month"],
-                bytes_to_terabytes(volume_bytes),
-                bytes_to_terabytes(volume_bytes + this_deleted_bytes),
-                bytes_to_terabytes(this_deleted_bytes),
-                bytes_to_terabytes(cumulative_volume_bytes),
+                f"{row['reporting_year']},{row['reporting_month']},{bytes_to_terabytes(volume_bytes)},"
+                f"{bytes_to_terabytes(volume_bytes + this_deleted_bytes)},"
+                f"{bytes_to_terabytes(this_deleted_bytes)},"
+                f"{bytes_to_terabytes(cumulative_volume_bytes)}"
             )
 
     volume_petabytes = bytes_to_petabytes(cumulative_volume_bytes)
