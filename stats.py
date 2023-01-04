@@ -856,7 +856,7 @@ def run_stats(config_filename):
     acacia_percent_used = (acacia_bytes / acacia_quota_bytes) * 100.0
     logger.info(
         "Acacia Quota Used:"
-        f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes)} TB /"
+        f" {bytes_to_terabytes(acacia_bytes)} TB /"
         f" {bytes_to_terabytes(acacia_quota_bytes)} TB == "
         f" {acacia_percent_used:.1f} % used"
     )
