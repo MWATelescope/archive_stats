@@ -3,3 +3,5 @@
 *.sh
 .idea/
 env/
+.python-version
+.vscode/
