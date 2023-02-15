@@ -603,10 +603,10 @@ def do_plot_archive_volume_per_month(
             )
 
             logger.info(
-                f"{row['reporting_year']},{row['reporting_month']},{bytes_to_terabytes(volume_bytes)},"
-                f"{bytes_to_terabytes(volume_bytes + this_deleted_bytes)},"
-                f"{bytes_to_terabytes(this_deleted_bytes)},"
-                f"{bytes_to_terabytes(cumulative_volume_bytes)}"
+                f"{row['reporting_year']},{row['reporting_month']},{bytes_to_terabytes(volume_bytes):.3f},"
+                f"{bytes_to_terabytes(volume_bytes + this_deleted_bytes):.3f},"
+                f"{bytes_to_terabytes(this_deleted_bytes):.3f},"
+                f"{bytes_to_terabytes(cumulative_volume_bytes):.3f}"
             )
 
     volume_petabytes = bytes_to_petabytes(cumulative_volume_bytes)
@@ -614,7 +614,7 @@ def do_plot_archive_volume_per_month(
     fig, _ = plt.subplots()
     plt.bar(x_axis, y_axis)
     plt.title(
-        f"{title} = {volume_petabytes:.2f} PB (as at"
+        f"{title} = {volume_petabytes:.3f} PB (as at"
         f" {time.strftime('%d-%b-%Y')})"
     )
     plt.xlabel("Time")
@@ -856,8 +856,8 @@ def run_stats(config_filename):
     acacia_percent_used = (acacia_bytes / acacia_quota_bytes) * 100.0
     logger.info(
         "Acacia Quota Used:"
-        f" {bytes_to_terabytes(acacia_bytes)} TB /"
-        f" {bytes_to_terabytes(acacia_quota_bytes)} TB == "
+        f" {bytes_to_terabytes(acacia_bytes):.3f} TB /"
+        f" {bytes_to_terabytes(acacia_quota_bytes):.3f} TB == "
         f" {acacia_percent_used:.1f} % used"
     )
     banksia_percent_used = (
@@ -865,8 +865,8 @@ def run_stats(config_filename):
     ) * 100.0
     logger.info(
         "Banksia Quota Used:"
-        f" {bytes_to_terabytes(dmf_bytes + banksia_bytes)} TB /"
-        f" {bytes_to_terabytes(banksia_quota_bytes)} TB == "
+        f" {bytes_to_terabytes(dmf_bytes + banksia_bytes):.3f} TB /"
+        f" {bytes_to_terabytes(banksia_quota_bytes):.3f} TB == "
         f" {banksia_percent_used:.1f} % used"
     )
     lts_percent_used = (
@@ -875,11 +875,25 @@ def run_stats(config_filename):
     ) * 100
     logger.info(
         "Pawsey Quota Used:"
-        f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes)} TB /"
-        f" {bytes_to_terabytes(acacia_quota_bytes + banksia_quota_bytes)} TB"
-        " == "
-        f"{lts_percent_used:.1f} % used"
+        f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes):.3f} TB"
+        f" / {bytes_to_terabytes(acacia_quota_bytes + banksia_quota_bytes):.3f} TB"
+        f" == {lts_percent_used:.1f} % used"
     )
+
+    logger.info("\n-------------------------------------------------------")
+    logger.info(
+        "Acacia Quota Available:"
+        f" {bytes_to_terabytes((acacia_quota_bytes) - (acacia_bytes)):.3f} TB "
+    )
+    logger.info(
+        "Banksia Quota Available:"
+        f" {bytes_to_terabytes((banksia_quota_bytes) - (dmf_bytes + banksia_bytes)):.3f} TB "
+    )
+    logger.info(
+        "Pawsey Quota Available:"
+        f" {bytes_to_terabytes((acacia_quota_bytes + banksia_quota_bytes) - (acacia_bytes + dmf_bytes + banksia_bytes)):.3f} TB "
+    )
+    logger.info("-------------------------------------------------------\n")
 
     # Either way show whats in the db
     dump_stats(mwa_tap_service, "stats.csv")
