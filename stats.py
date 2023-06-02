@@ -264,7 +264,7 @@ def dump_stats(vo_service, filename):
                 ,projectid
                 ,mwa_array_configuration
                 ,SUM(duration) as total_time_secs
-                ,SUM(total_archived_data_bytes) as total_archived_data_bytes
+                ,SUM(total_archived_bytes) as total_archived_bytes
                 ,SUM(files_deleted_bytes) as deleted_bytes
             FROM mwa.observation
             GROUP BY 1,2,3
@@ -280,8 +280,8 @@ def dump_stats(vo_service, filename):
             else:
                 hours = 0.0
 
-            if not row["total_archived_data_bytes"] is None:
-                this_bytes = int(row["total_archived_data_bytes"])
+            if not row["total_archived_bytes"] is None:
+                this_bytes = int(row["total_archived_bytes"])
                 total_bytes += this_bytes
                 terabytes = bytes_to_terabytes(this_bytes)
             else:
@@ -296,7 +296,7 @@ def dump_stats(vo_service, filename):
                     row["projectid"],
                     row["mwa_array_configuration"],
                     int(row["total_time_secs"]),
-                    int(row["total_archived_data_bytes"]),
+                    int(row["total_archived_bytes"]),
                     int(row["deleted_bytes"]),
                     hours,
                     terabytes,
@@ -332,7 +332,7 @@ def dump_stats_by_project(local_db_conn, filename):
             """SELECT
                     projectid
                     ,projectshortname
-                    ,SUM(total_archived_data_bytes) As total_archived_data_bytes
+                    ,SUM(total_archived_bytes) As total_archived_bytes
             FROM mwa.observation
             GROUP BY projectid,
                     projectshortname
@@ -347,7 +347,7 @@ def dump_stats_by_project(local_db_conn, filename):
             projname = row["projectshortname"]
 
             terabytes = bytes_to_terabytes(
-                int(row["total_archived_data_bytes"])
+                int(row["total_archived_bytes"])
             )
             stats_csv_writer.writerow(
                 (
@@ -381,7 +381,7 @@ def dump_monthly_stats(vo_service, filename):
                     date_part('year', date_trunc('day', starttime_utc)) as reporting_year
                     ,date_part('month', date_trunc('day', starttime_utc)) as reporting_month
                     ,SUM(duration) as month_secs
-                    ,SUM(total_archived_data_bytes) as month_bytes
+                    ,SUM(total_archived_bytes) as month_bytes
                 FROM mwa.observation
                 GROUP BY 1,2
                 ORDER BY 1,2""",
@@ -541,7 +541,7 @@ def do_plot_archive_volume_per_month(
         f"""SELECT
                 date_part('year', date_trunc('day', starttime_utc)) as reporting_year
                 ,date_part('month', date_trunc('day', starttime_utc)) as reporting_month
-                ,SUM(total_archived_data_bytes + files_deleted_bytes) as total_data_bytes
+                ,SUM(total_archived_bytes + files_deleted_bytes) as total_data_bytes
             FROM mwa.observation
             WHERE
                 starttime_utc BETWEEN '{date_from}' AND '{date_to}'
@@ -640,7 +640,7 @@ def do_plot_archive_volume_per_project(
         tap_service,
         f"""SELECT projectid,
                 projectshortname,
-                COALESCE(SUM(total_archived_data_bytes),0) as total_archived_data_bytes
+                COALESCE(SUM(total_archived_bytes),0) as total_archived_bytes
             FROM mwa.observation
             WHERE
                 starttime_utc BETWEEN '{date_from}' AND '{date_to}'
@@ -650,7 +650,7 @@ def do_plot_archive_volume_per_project(
     )
 
     for row in results:
-        value_bytes = int(row["total_archived_data_bytes"])
+        value_bytes = int(row["total_archived_bytes"])
 
         if slice_no >= max_slices:
             other_bytes += value_bytes
