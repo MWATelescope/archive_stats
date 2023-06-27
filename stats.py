@@ -346,9 +346,7 @@ def dump_stats_by_project(local_db_conn, filename):
             projid = row["projectid"]
             projname = row["projectshortname"]
 
-            terabytes = bytes_to_terabytes(
-                int(row["total_archived_bytes"])
-            )
+            terabytes = bytes_to_terabytes(int(row["total_archived_bytes"]))
             stats_csv_writer.writerow(
                 (
                     projid,
