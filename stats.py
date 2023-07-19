@@ -781,6 +781,14 @@ def run_stats(config_filename):
     tap_url = config.get("MWA TAP", "url")
     mwa_tap_service = vo.dal.TAPService(tap_url)
 
+    # Example of the expected format is: 01-Jul-2022
+    special_date_from = datetime.strptime(
+        config.get("asvo_stats", "special_date_from"), "%d-%b-%Y"
+    )
+    special_date_to = datetime.strptime(
+        config.get("asvo_stats", "special_date_to"), "%d-%b-%Y"
+    )
+
     mwa_db = psycopg2.pool.ThreadedConnectionPool(
         minconn=1,
         maxconn=2,
@@ -879,17 +887,22 @@ def run_stats(config_filename):
     )
 
     logger.info("\n-------------------------------------------------------")
+
+    acacia_available_bytes = acacia_quota_bytes - acacia_bytes
+    banksia_available_bytes = banksia_quota_bytes - (dmf_bytes + banksia_bytes)
+    pawsey_available_bytes = acacia_available_bytes + banksia_available_bytes
+
     logger.info(
         "Acacia Quota Available:"
-        f" {bytes_to_terabytes((acacia_quota_bytes) - (acacia_bytes)):.3f} TB "
+        f" {bytes_to_terabytes(acacia_available_bytes):.3f} TB "
     )
     logger.info(
         "Banksia Quota Available:"
-        f" {bytes_to_terabytes((banksia_quota_bytes) - (dmf_bytes + banksia_bytes)):.3f} TB "
+        f" {bytes_to_terabytes(banksia_available_bytes):.3f} TB "
     )
     logger.info(
         "Pawsey Quota Available:"
-        f" {bytes_to_terabytes((acacia_quota_bytes + banksia_quota_bytes) - (acacia_bytes + dmf_bytes + banksia_bytes)):.3f} TB "
+        f" {bytes_to_terabytes(pawsey_available_bytes):.3f} TB "
     )
     logger.info("-------------------------------------------------------\n")
 
@@ -899,10 +912,10 @@ def run_stats(config_filename):
     dump_stats_by_project(mwa_tap_service, "stats_by_project.csv")
 
     # special stats get dumped for the quarterly report to AAL
-    dump_year_from = 2022
-    dump_year_to = 2022
-    dump_month_from = 7
-    dump_month_to = 12
+    dump_year_from = special_date_from.year
+    dump_year_to = special_date_to.year
+    dump_month_from = special_date_from.month
+    dump_month_to = special_date_to.month
 
     do_plot_archive_volume_per_month(
         mwa_tap_service,
