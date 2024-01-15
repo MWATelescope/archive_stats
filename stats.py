@@ -25,9 +25,7 @@ logger.setLevel(logging.DEBUG)
 console_log = logging.StreamHandler()
 console_log.setLevel(logging.DEBUG)
 console_log.setFormatter(
-    logging.Formatter(
-        "%(asctime)s, %(levelname)s, %(threadName)s, %(message)s"
-    )
+    logging.Formatter("%(asctime)s, %(levelname)s, %(threadName)s, %(message)s")
 )
 logger.addHandler(console_log)
 
@@ -64,9 +62,7 @@ def run_mc_du(profile: str, bucket_name: str) -> int:
     # }
     size_bytes = int(mc_output["size"])
 
-    logger.info(
-        f"{cmd} == {size_bytes} bytes {bytes_to_terabytes(size_bytes):.3f} TB"
-    )
+    logger.info(f"{cmd} == {size_bytes} bytes {bytes_to_terabytes(size_bytes):.3f} TB")
 
     return size_bytes
 
@@ -95,14 +91,13 @@ def get_acacia_usage(profile, endpoint_url) -> int:
     return total_size
 
 
-def randomise_banksia_vss(string_with_dollar: str) -> str:
-    """Replaces the $ in the string_with_dollar (if any) with a
-    randomly chose VSS number"""
-    vss = random.randint(1, 6)
-    return string_with_dollar.replace("$", str(vss))
+def randomise_banksia_vss(banksia_vss_endpoints: list) -> str:
+    """Randomly chooses a VSS from the list of possible ones read from the config file"""
+    vss = random.randint(0, len(banksia_vss_endpoints) - 1)
+    return banksia_vss_endpoints[vss]
 
 
-def get_banksia_usage(aws_profile, endpoint_url):
+def get_banksia_usage(aws_profile, endpoint_urls: list):
     """
     Returns the bytes used from the S3 endpoint
     as DMF, banksia
@@ -117,9 +112,7 @@ def get_banksia_usage(aws_profile, endpoint_url):
     dmf_total_size = 0
     banksia_total_size = 0
 
-    s3_resource = get_s3_resource(
-        aws_profile, randomise_banksia_vss(endpoint_url)
-    )
+    s3_resource = get_s3_resource(aws_profile, randomise_banksia_vss(endpoint_urls))
 
     bucket_list = [bucket.name for bucket in s3_resource.buckets.all()]
     dmf_buckets = []
@@ -144,12 +137,10 @@ def get_banksia_usage(aws_profile, endpoint_url):
     # both the credentials AND the endpoint, so here we want to randomise the profile
     # so we run mc against different VSS's so we don't kill Banksia!
     dmf_values = [
-        (randomise_banksia_vss(f"{aws_profile}$"), bucket)
-        for bucket in dmf_buckets
+        (randomise_banksia_vss(endpoint_urls), bucket) for bucket in dmf_buckets
     ]
     banksia_values = [
-        (randomise_banksia_vss(f"{aws_profile}$"), bucket)
-        for bucket in banksia_buckets
+        (randomise_banksia_vss(endpoint_urls), bucket) for bucket in banksia_buckets
     ]
 
     with mp.Pool(cpu_count) as pool:
@@ -306,9 +297,7 @@ def dump_stats(vo_service, filename):
     logger.info(f"{i} rows written to {filename}.\n")
     logger.info(f"Total data: { bytes_to_petabytes(total_bytes) } PB\n")
     logger.info(f"Total time: { total_secs / 3600 } hours\n")
-    logger.info(
-        f"Total deleted data: { bytes_to_petabytes(deleted_bytes) } PB\n"
-    )
+    logger.info(f"Total deleted data: { bytes_to_petabytes(deleted_bytes) } PB\n")
 
 
 def dump_stats_by_project(local_db_conn, filename):
@@ -479,8 +468,7 @@ def get_deleted_data_by_month(mwa_db, date_from, date_to):
         conn = mwa_db.getconn()
         cursor = conn.cursor()
         logger.info(
-            "Running big query to get deleted data stats per month... please"
-            " wait!"
+            "Running big query to get deleted data stats per month... please wait!"
         )
         cursor.execute(
             """
@@ -612,8 +600,7 @@ def do_plot_archive_volume_per_month(
     fig, _ = plt.subplots()
     plt.bar(x_axis, y_axis)
     plt.title(
-        f"{title} = {volume_petabytes:.3f} PB (as at"
-        f" {time.strftime('%d-%b-%Y')})"
+        f"{title} = {volume_petabytes:.3f} PB (as at {time.strftime('%d-%b-%Y')})"
     )
     plt.xlabel("Time")
     plt.xticks(rotation=90)
@@ -763,9 +750,7 @@ def bytes_to_petabytes(bytes_value):
     if bytes_value is None:
         return 0.0
     else:
-        return float(bytes_value) / (
-            1000.0 * 1000.0 * 1000.0 * 1000.0 * 1000.0
-        )
+        return float(bytes_value) / (1000.0 * 1000.0 * 1000.0 * 1000.0 * 1000.0)
 
 
 def run_stats(config_filename):
@@ -817,11 +802,13 @@ def run_stats(config_filename):
 
     if config.getint("S3", "use_banksia") == 1:
         banksia_profile = config.get("S3", "banksia_profile")
-        banksia_endpoint_url = config.get("S3", "banksia_endpoint_url")
+        banksia_endpoint_urls = str(config.get("S3", "banksia_endpoint_urls")).split(
+            ","
+        )
 
         logger.info("Getting stats from Banksia...")
         dmf_bytes, banksia_bytes = get_banksia_usage(
-            banksia_profile, banksia_endpoint_url
+            banksia_profile, banksia_endpoint_urls
         )
     else:
         logger.info("Skipping stats from Banksia (use_banksia != 1)")
@@ -836,25 +823,25 @@ def run_stats(config_filename):
     ) = get_location_summary_bytes(mwa_db)
 
     logger.info(
-        f"Acacia : {bytes_to_terabytes(acacia_bytes)} TB vs"
+        f"Acacia vs DB         : {bytes_to_terabytes(acacia_bytes)} TB vs"
         f" {bytes_to_terabytes(db_acacia_bytes)} TB"
     )
     logger.info(
-        f"DMF    : {bytes_to_terabytes(dmf_bytes)} TB vs"
+        f"DMF vs DB            : {bytes_to_terabytes(dmf_bytes)} TB vs"
         f" {bytes_to_terabytes(db_dmf_bytes)} TB"
     )
     logger.info(
-        f"Banksia: {bytes_to_terabytes(banksia_bytes)} TB vs"
+        f"Banksia vs DB        : {bytes_to_terabytes(banksia_bytes)} TB vs"
         f" {bytes_to_terabytes(db_banksia_bytes)} TB"
     )
     logger.info("--------------------------------------------------")
     logger.info(
-        f"Total Banksia   : {bytes_to_terabytes(dmf_bytes+banksia_bytes)} TB"
+        f"Total Banksia vs DB  : {bytes_to_terabytes(dmf_bytes+banksia_bytes)} TB"
         f" vs {bytes_to_terabytes(db_dmf_bytes + db_banksia_bytes)} TB"
     )
     logger.info("--------------------------------------------------")
     logger.info(
-        "Total Pawsey LTS:"
+        "Total Pawsey LTS vs DB:"
         f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes)} TB vs"
         f" {bytes_to_terabytes(db_acacia_bytes + db_dmf_bytes + db_banksia_bytes)} TB"
     )
@@ -866,9 +853,7 @@ def run_stats(config_filename):
         f" {bytes_to_terabytes(acacia_quota_bytes):.3f} TB == "
         f" {acacia_percent_used:.1f} % used"
     )
-    banksia_percent_used = (
-        (dmf_bytes + banksia_bytes) / banksia_quota_bytes
-    ) * 100.0
+    banksia_percent_used = ((dmf_bytes + banksia_bytes) / banksia_quota_bytes) * 100.0
     logger.info(
         "Banksia Quota Used:"
         f" {bytes_to_terabytes(dmf_bytes + banksia_bytes):.3f} TB /"
@@ -893,16 +878,14 @@ def run_stats(config_filename):
     pawsey_available_bytes = acacia_available_bytes + banksia_available_bytes
 
     logger.info(
-        "Acacia Quota Available:"
-        f" {bytes_to_terabytes(acacia_available_bytes):.3f} TB "
+        f"Acacia Quota Available: {bytes_to_terabytes(acacia_available_bytes):.3f} TB "
     )
     logger.info(
         "Banksia Quota Available:"
         f" {bytes_to_terabytes(banksia_available_bytes):.3f} TB "
     )
     logger.info(
-        "Pawsey Quota Available:"
-        f" {bytes_to_terabytes(pawsey_available_bytes):.3f} TB "
+        f"Pawsey Quota Available: {bytes_to_terabytes(pawsey_available_bytes):.3f} TB "
     )
     logger.info("-------------------------------------------------------\n")
 
