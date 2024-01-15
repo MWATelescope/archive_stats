@@ -91,10 +91,20 @@ def get_acacia_usage(profile, endpoint_url) -> int:
     return total_size
 
 
-def randomise_banksia_vss(banksia_vss_endpoints: list) -> str:
+def randomise_banksia_vss_url(banksia_vss_endpoints: list) -> str:
     """Randomly chooses a VSS from the list of possible ones read from the config file"""
     vss = random.randint(0, len(banksia_vss_endpoints) - 1)
     return banksia_vss_endpoints[vss]
+
+
+def randomise_banksia_vss_profile(banksia_vss_endpoints: list) -> str:
+    """Randomly chooses a VSS from the list of possible ones read from the config file
+    and then return "banksiaN" where N is the vss-N from the URL of the randomly
+    chosen URL (13 character in the URL)"""
+    vss = random.randint(0, len(banksia_vss_endpoints) - 1)
+    # Get the vss number- from: https://vss-1.pawsey.org.au:9000 it would be 1.
+
+    return f"banksia{banksia_vss_endpoints[vss][12]}"
 
 
 def get_banksia_usage(aws_profile, endpoint_urls: list):
@@ -112,7 +122,7 @@ def get_banksia_usage(aws_profile, endpoint_urls: list):
     dmf_total_size = 0
     banksia_total_size = 0
 
-    s3_resource = get_s3_resource(aws_profile, randomise_banksia_vss(endpoint_urls))
+    s3_resource = get_s3_resource(aws_profile, randomise_banksia_vss_url(endpoint_urls))
 
     bucket_list = [bucket.name for bucket in s3_resource.buckets.all()]
     dmf_buckets = []
@@ -137,10 +147,11 @@ def get_banksia_usage(aws_profile, endpoint_urls: list):
     # both the credentials AND the endpoint, so here we want to randomise the profile
     # so we run mc against different VSS's so we don't kill Banksia!
     dmf_values = [
-        (randomise_banksia_vss(endpoint_urls), bucket) for bucket in dmf_buckets
+        (randomise_banksia_vss_profile(endpoint_urls), bucket) for bucket in dmf_buckets
     ]
     banksia_values = [
-        (randomise_banksia_vss(endpoint_urls), bucket) for bucket in banksia_buckets
+        (randomise_banksia_vss_profile(endpoint_urls), bucket)
+        for bucket in banksia_buckets
     ]
 
     with mp.Pool(cpu_count) as pool:
