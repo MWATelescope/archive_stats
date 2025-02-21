@@ -1,4 +1,5 @@
 """This module is used to provide overall storage stats for the MWA Archive"""
+
 import argparse
 import json
 import logging
@@ -24,9 +25,7 @@ logger = logging.getLogger("archive_stats")
 logger.setLevel(logging.DEBUG)
 console_log = logging.StreamHandler()
 console_log.setLevel(logging.DEBUG)
-console_log.setFormatter(
-    logging.Formatter("%(asctime)s, %(levelname)s, %(threadName)s, %(message)s")
-)
+console_log.setFormatter(logging.Formatter("%(asctime)s, %(levelname)s, %(threadName)s, %(message)s"))
 logger.addHandler(console_log)
 
 
@@ -146,13 +145,8 @@ def get_banksia_usage(aws_profile, endpoint_urls: list):
     # in THIS case the "profile" is a MinIO profile! In mc, the profile defines
     # both the credentials AND the endpoint, so here we want to randomise the profile
     # so we run mc against different VSS's so we don't kill Banksia!
-    dmf_values = [
-        (randomise_banksia_vss_profile(endpoint_urls), bucket) for bucket in dmf_buckets
-    ]
-    banksia_values = [
-        (randomise_banksia_vss_profile(endpoint_urls), bucket)
-        for bucket in banksia_buckets
-    ]
+    dmf_values = [(randomise_banksia_vss_profile(endpoint_urls), bucket) for bucket in dmf_buckets]
+    banksia_values = [(randomise_banksia_vss_profile(endpoint_urls), bucket) for bucket in banksia_buckets]
 
     with mp.Pool(cpu_count) as pool:
         banksia_results = pool.starmap(run_mc_du, banksia_values)
@@ -192,7 +186,8 @@ def get_location_summary_bytes(mwa_db):
                 when 'mwa04fs' then 'DMF'
                 when 'volt01fs' then 'DMF'
                 else 'Banksia' END
-            when location IN (2) then 'Acacia' END As Location
+            when location =2 then 'Acacia_mwaingest'
+            when location = 4 then 'Acacia_mwa' END As Location
             ,sum(size)
             FROM data_files
             WHERE deleted_timestamp is null and remote_archived=true
@@ -206,12 +201,14 @@ def get_location_summary_bytes(mwa_db):
         if conn is not None:
             mwa_db.putconn(conn)
 
-    if len(results) == 3:
+    if len(results) == 3 or len(results) == 4:
         for row in results:
             if row[0] == "DMF":
                 dmf = row[1]
-            elif row[0] == "Acacia":
-                acacia = row[1]
+            elif row[0] == "Acacia_mwaingest":
+                acacia_mwaingest = row[1]
+            elif row[0] == "Acacia_mwa":
+                acacia_mwa = row[1]
             elif row[0] == "Banksia":
                 banksia = row[1]
             else:
@@ -221,7 +218,7 @@ def get_location_summary_bytes(mwa_db):
         logger.info("Error wrong number of rows!")
         exit(-1)
 
-    return dmf, acacia, banksia
+    return dmf, acacia_mwaingest, acacia_mwa, banksia
 
 
 def do_query(vo_service, adql_statement):
@@ -478,9 +475,7 @@ def get_deleted_data_by_month(mwa_db, date_from, date_to):
     try:
         conn = mwa_db.getconn()
         cursor = conn.cursor()
-        logger.info(
-            "Running big query to get deleted data stats per month... please wait!"
-        )
+        logger.info("Running big query to get deleted data stats per month... please wait!")
         cursor.execute(
             """
             SELECT
@@ -560,10 +555,7 @@ def do_plot_archive_volume_per_month(
             # col 1 = Reporting Month
             # col 2 = sum(data deleted bytes)
             for drow in deleted_results:
-                if (
-                    row["reporting_year"] == drow[0]
-                    and row["reporting_month"] == drow[1]
-                ):
+                if row["reporting_year"] == drow[0] and row["reporting_month"] == drow[1]:
                     deleted_bytes = int(drow[2])
                     this_bytes -= deleted_bytes
                     this_deleted_bytes = deleted_bytes
@@ -573,9 +565,7 @@ def do_plot_archive_volume_per_month(
 
         # Check striding
         if row["reporting_month"] % stride_months == 0:
-            x_axis.append(
-                f'{int(row["reporting_year"]):d}-{int(row["reporting_month"]):02d}'
-            )
+            x_axis.append(f'{int(row["reporting_year"]):d}-{int(row["reporting_month"]):02d}')
 
             if cumulative:
                 y_axis.append(bytes_to_terabytes(cumulative_volume_bytes))
@@ -594,10 +584,7 @@ def do_plot_archive_volume_per_month(
             and row["reporting_month"] >= dump_month_from
             and row["reporting_month"] <= dump_month_to
         ):
-            logger.info(
-                "year, month, ingested-deleted, ingested, deleted, cuml"
-                " archive volume(all in TB)"
-            )
+            logger.info("year, month, ingested-deleted, ingested, deleted, cuml" " archive volume(all in TB)")
 
             logger.info(
                 f"{row['reporting_year']},{row['reporting_month']},{bytes_to_terabytes(volume_bytes):.3f},"
@@ -610,9 +597,7 @@ def do_plot_archive_volume_per_month(
 
     fig, _ = plt.subplots()
     plt.bar(x_axis, y_axis)
-    plt.title(
-        f"{title} = {volume_petabytes:.3f} PB (as at {time.strftime('%d-%b-%Y')})"
-    )
+    plt.title(f"{title} = {volume_petabytes:.3f} PB (as at {time.strftime('%d-%b-%Y')})")
     plt.xlabel("Time")
     plt.xticks(rotation=90)
     plt.ylabel("Terabytes (TB)")
@@ -620,9 +605,7 @@ def do_plot_archive_volume_per_month(
     plt.savefig(filename, dpi=DPI)
 
 
-def do_plot_archive_volume_per_project(
-    tap_service, date_from, date_to, title, filename
-):
+def do_plot_archive_volume_per_project(tap_service, date_from, date_to, title, filename):
     """Plot archive volume per project"""
     clear_plots()
 
@@ -677,9 +660,7 @@ def do_plot_archive_volume_per_project(
     )
 
 
-def do_plot_telescope_time_per_project(
-    tap_service, date_from, date_to, title, filename
-):
+def do_plot_telescope_time_per_project(tap_service, date_from, date_to, title, filename):
     """Plot telescope time per project"""
     clear_plots()
 
@@ -771,19 +752,16 @@ def run_stats(config_filename):
     config = ConfigParser()
     config.read(config_filename)
 
-    acacia_quota_bytes = config.getint("asvo_stats", "acacia_quota_bytes")
+    acacia_mwaingest_quota_bytes = config.getint("asvo_stats", "acacia_mwaingest_quota_bytes")
+    acacia_mwa_quota_bytes = config.getint("asvo_stats", "acacia_mwa_quota_bytes")
     banksia_quota_bytes = config.getint("asvo_stats", "banksia_quota_bytes")
 
     tap_url = config.get("MWA TAP", "url")
     mwa_tap_service = vo.dal.TAPService(tap_url)
 
     # Example of the expected format is: 01-Jul-2022
-    special_date_from = datetime.strptime(
-        config.get("asvo_stats", "special_date_from"), "%d-%b-%Y"
-    )
-    special_date_to = datetime.strptime(
-        config.get("asvo_stats", "special_date_to"), "%d-%b-%Y"
-    )
+    special_date_from = datetime.strptime(config.get("asvo_stats", "special_date_from"), "%d-%b-%Y")
+    special_date_to = datetime.strptime(config.get("asvo_stats", "special_date_to"), "%d-%b-%Y")
 
     mwa_db = psycopg2.pool.ThreadedConnectionPool(
         minconn=1,
@@ -801,26 +779,32 @@ def run_stats(config_filename):
     six_months_ago = today - relativedelta(months=6)
 
     # Get acacia and banksia totals from S3
-    if config.getint("S3", "use_acacia") == 1:
-        acacia_profile = config.get("S3", "acacia_profile")
-        acacia_endpoint_url = config.get("S3", "acacia_endpoint_url")
+    if config.getint("S3", "use_acacia_mwaingest") == 1:
+        acacia_mwaingest_profile = config.get("S3", "acacia_mwaingest_profile")
+        acacia_mwaingest_endpoint_url = config.get("S3", "acacia_mwaingest_endpoint_url")
 
-        logger.info("Getting stats from Acacia...")
-        acacia_bytes = get_acacia_usage(acacia_profile, acacia_endpoint_url)
+        logger.info("Getting stats from Acacia_mwaingest...")
+        acacia_mwaingest_bytes = get_acacia_usage(acacia_mwaingest_profile, acacia_mwaingest_endpoint_url)
     else:
-        logger.info("Skipping stats from Acacia (use_acacia != 1)")
-        acacia_bytes = 0
+        logger.info("Skipping stats from Acacia_mwaingest (use_acacia_mwaingest != 1)")
+        acacia_mwaingest_bytes = 0
+
+    if config.getint("S3", "use_acacia_mwa") == 1:
+        acacia_mwa_profile = config.get("S3", "acacia_mwa_profile")
+        acacia_mwa_endpoint_url = config.get("S3", "acacia_mwa_endpoint_url")
+
+        logger.info("Getting stats from Acacia_mwa...")
+        acacia_mwa_bytes = get_acacia_usage(acacia_mwa_profile, acacia_mwa_endpoint_url)
+    else:
+        logger.info("Skipping stats from Acacia_mwa (use_acacia_mwa != 1)")
+        acacia_mwa_bytes = 0
 
     if config.getint("S3", "use_banksia") == 1:
         banksia_profile = config.get("S3", "banksia_profile")
-        banksia_endpoint_urls = str(config.get("S3", "banksia_endpoint_urls")).split(
-            ","
-        )
+        banksia_endpoint_urls = str(config.get("S3", "banksia_endpoint_urls")).split(",")
 
         logger.info("Getting stats from Banksia...")
-        dmf_bytes, banksia_bytes = get_banksia_usage(
-            banksia_profile, banksia_endpoint_urls
-        )
+        dmf_bytes, banksia_bytes = get_banksia_usage(banksia_profile, banksia_endpoint_urls)
     else:
         logger.info("Skipping stats from Banksia (use_banksia != 1)")
         dmf_bytes = 0
@@ -829,17 +813,21 @@ def run_stats(config_filename):
     logger.info("Getting summary stats from database...")
     (
         db_dmf_bytes,
-        db_acacia_bytes,
+        db_acacia_mwaingest_bytes,
+        db_acacia_mwa_bytes,
         db_banksia_bytes,
     ) = get_location_summary_bytes(mwa_db)
 
     logger.info(
-        f"Acacia vs DB         : {bytes_to_terabytes(acacia_bytes)} TB vs"
-        f" {bytes_to_terabytes(db_acacia_bytes)} TB"
+        f"Acacia mwaingest vs DB         : {bytes_to_terabytes(acacia_mwaingest_bytes)} TB vs"
+        f" {bytes_to_terabytes(db_acacia_mwaingest_bytes)} TB"
     )
     logger.info(
-        f"DMF vs DB            : {bytes_to_terabytes(dmf_bytes)} TB vs"
-        f" {bytes_to_terabytes(db_dmf_bytes)} TB"
+        f"Acacia mwa       vs DB         : {bytes_to_terabytes(acacia_mwa_bytes)} TB vs"
+        f" {bytes_to_terabytes(db_acacia_mwa_bytes)} TB"
+    )
+    logger.info(
+        f"DMF vs DB            : {bytes_to_terabytes(dmf_bytes)} TB vs" f" {bytes_to_terabytes(db_dmf_bytes)} TB"
     )
     logger.info(
         f"Banksia vs DB        : {bytes_to_terabytes(banksia_bytes)} TB vs"
@@ -853,16 +841,23 @@ def run_stats(config_filename):
     logger.info("--------------------------------------------------")
     logger.info(
         "Total Pawsey LTS vs DB:"
-        f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes)} TB vs"
-        f" {bytes_to_terabytes(db_acacia_bytes + db_dmf_bytes + db_banksia_bytes)} TB"
+        f" {bytes_to_terabytes(acacia_mwaingest_bytes + acacia_mwa_bytes + dmf_bytes + banksia_bytes)} TB vs"
+        f" {bytes_to_terabytes(db_acacia_mwaingest_bytes + db_acacia_mwa_bytes + db_dmf_bytes + db_banksia_bytes)} TB"
     )
     logger.info("--------------------------------------------------")
-    acacia_percent_used = (acacia_bytes / acacia_quota_bytes) * 100.0
+    acacia_mwaingest_percent_used = ((acacia_mwaingest_bytes) / acacia_mwaingest_quota_bytes) * 100.0
     logger.info(
-        "Acacia Quota Used:"
-        f" {bytes_to_terabytes(acacia_bytes):.3f} TB /"
-        f" {bytes_to_terabytes(acacia_quota_bytes):.3f} TB == "
-        f" {acacia_percent_used:.1f} % used"
+        "Acacia_mwaingest Quota Used:"
+        f" {bytes_to_terabytes(acacia_mwaingest_bytes):.3f} TB /"
+        f" {bytes_to_terabytes(acacia_mwaingest_quota_bytes):.3f} TB == "
+        f" {acacia_mwaingest_percent_used:.1f} % used"
+    )
+    acacia_mwa_percent_used = ((acacia_mwa_bytes) / acacia_mwa_quota_bytes) * 100.0
+    logger.info(
+        "Acacia_mwa Quota Used:"
+        f" {bytes_to_terabytes(acacia_mwa_bytes):.3f} TB /"
+        f" {bytes_to_terabytes(acacia_mwa_quota_bytes):.3f} TB == "
+        f" {acacia_mwa_percent_used:.1f} % used"
     )
     banksia_percent_used = ((dmf_bytes + banksia_bytes) / banksia_quota_bytes) * 100.0
     logger.info(
@@ -872,32 +867,27 @@ def run_stats(config_filename):
         f" {banksia_percent_used:.1f} % used"
     )
     lts_percent_used = (
-        (acacia_bytes + dmf_bytes + banksia_bytes)
-        / (acacia_quota_bytes + banksia_quota_bytes)
+        (acacia_mwaingest_bytes + acacia_mwa_bytes + dmf_bytes + banksia_bytes)
+        / (acacia_mwaingest_quota_bytes + acacia_mwa_quota_bytes + banksia_quota_bytes)
     ) * 100
     logger.info(
         "Pawsey Quota Used:"
-        f" {bytes_to_terabytes(acacia_bytes + dmf_bytes + banksia_bytes):.3f} TB"
-        f" / {bytes_to_terabytes(acacia_quota_bytes + banksia_quota_bytes):.3f} TB"
+        f" {bytes_to_terabytes(acacia_mwaingest_bytes + acacia_mwa_bytes + dmf_bytes + banksia_bytes):.3f} TB"
+        f" / {bytes_to_terabytes(acacia_mwaingest_quota_bytes + acacia_mwa_quota_bytes + banksia_quota_bytes):.3f} TB"
         f" == {lts_percent_used:.1f} % used"
     )
 
     logger.info("\n-------------------------------------------------------")
 
-    acacia_available_bytes = acacia_quota_bytes - acacia_bytes
+    acacia_mwaingest_available_bytes = acacia_mwaingest_quota_bytes - acacia_mwaingest_bytes
+    acacia_mwa_available_bytes = acacia_mwa_quota_bytes - acacia_mwa_bytes
     banksia_available_bytes = banksia_quota_bytes - (dmf_bytes + banksia_bytes)
-    pawsey_available_bytes = acacia_available_bytes + banksia_available_bytes
+    pawsey_available_bytes = acacia_mwaingest_available_bytes + acacia_mwa_available_bytes + banksia_available_bytes
 
-    logger.info(
-        f"Acacia Quota Available: {bytes_to_terabytes(acacia_available_bytes):.3f} TB "
-    )
-    logger.info(
-        "Banksia Quota Available:"
-        f" {bytes_to_terabytes(banksia_available_bytes):.3f} TB "
-    )
-    logger.info(
-        f"Pawsey Quota Available: {bytes_to_terabytes(pawsey_available_bytes):.3f} TB "
-    )
+    logger.info(f"Acacia_mwaingest Quota Available: {bytes_to_terabytes(acacia_mwaingest_available_bytes):.3f} TB ")
+    logger.info(f"Acacia_mwa Quota Available      : {bytes_to_terabytes(acacia_mwa_available_bytes):.3f} TB ")
+    logger.info(f"Banksia Quota Available         : {bytes_to_terabytes(banksia_available_bytes):.3f} TB ")
+    logger.info(f"Pawsey Quota Available          : {bytes_to_terabytes(pawsey_available_bytes):.3f} TB ")
     logger.info("-------------------------------------------------------\n")
 
     # Either way show whats in the db
@@ -1008,9 +998,7 @@ if __name__ == "__main__":
         " to Acacia/Banksia and the MWA database.\n"
     )
 
-    parser.add_argument(
-        "-c", "--cfg", required=True, help="Configuration file location.\n"
-    )
+    parser.add_argument("-c", "--cfg", required=True, help="Configuration file location.\n")
 
     args = vars(parser.parse_args())
 
