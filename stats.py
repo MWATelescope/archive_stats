@@ -171,6 +171,10 @@ def get_location_summary_bytes(mwa_db):
     conn = None
     results = None
 
+    acacia_mwaingest = 0
+    acacia_mwa = 0
+    banksia = 0
+
     try:
         conn = mwa_db.getconn()
         cursor = conn.cursor()
