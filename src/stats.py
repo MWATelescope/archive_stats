@@ -37,7 +37,7 @@ def get_s3_resource(profile, endpoint_url) -> boto3.resource:
 
 def run_mc_du(profile: str, bucket_name: str) -> int:
     """Runs mc and appends output to filename"""
-    cmd = f"/home/gsleap/mc du {profile}/{bucket_name} --json"
+    cmd = f"/home/gsleap/minio-binaries/mc du {profile}/{bucket_name} --json"
 
     logger.info(f"{cmd}...")
 
