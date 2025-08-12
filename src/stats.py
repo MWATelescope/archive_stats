@@ -277,20 +277,20 @@ def dump_stats(vo_service, filename):
         for row in results:
             i = i + 1
 
-            if not row["total_time_secs"] is None:
+            if row["total_time_secs"] is not None:
                 total_secs += int(row["total_time_secs"])
                 hours = int(row["total_time_secs"]) / 3600
             else:
                 hours = 0.0
 
-            if not row["total_archived_bytes"] is None:
+            if row["total_archived_bytes"] is not None:
                 this_bytes = int(row["total_archived_bytes"])
                 total_bytes += this_bytes
                 terabytes = bytes_to_terabytes(this_bytes)
             else:
                 terabytes = 0.0
 
-            if not row["deleted_bytes"] is None:
+            if row["deleted_bytes"] is not None:
                 deleted_bytes += int(row["deleted_bytes"])
 
             stats_csv_writer.writerow(
