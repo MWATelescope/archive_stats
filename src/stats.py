@@ -411,31 +411,31 @@ def dump_monthly_stats(vo_service, filename):
         logger.info(f"{i} rows written to {filename}.\n")
 
 
-def get_filetype_by_id(filetype_id):
-    """Return a filetype name given an id"""
-    types = [
-        "Unknown (0)",
-        "Raw VSIB burst",
-        "Averaged VSIB burst",
-        "Instrument config",
-        "header.txt file",
-        "Instrument config header",
-        "lacspc",
-        "lccspc",
-        "Raw Correlator fits",
-        "Antenna config header",
-        "MWA Flag File",
-        "Raw Voltage",
-        "Raw Voltage Recombined",
-        "uvfits",
-        "metafits PPD File",
-        "Voltage ICS",
-        "Voltage Recombined TAR",
-    ]
-    try:
-        return types[filetype_id]
-    except IndexError:
-        return f"Unknown ({filetype_id})"
+# def get_filetype_by_id(filetype_id):
+#     """Return a filetype name given an id"""
+#     types = [
+#         "Unknown (0)",
+#         "Raw VSIB burst",
+#         "Averaged VSIB burst",
+#         "Instrument config",
+#         "header.txt file",
+#         "Instrument config header",
+#         "lacspc",
+#         "lccspc",
+#         "Raw Correlator fits",
+#         "Antenna config header",
+#         "MWA Flag File",
+#         "Raw Voltage",
+#         "Raw Voltage Recombined",
+#         "uvfits",
+#         "metafits PPD File",
+#         "Voltage ICS",
+#         "Voltage Recombined TAR",
+#     ]
+#     try:
+#         return types[filetype_id]
+#     except IndexError:
+#         return f"Unknown ({filetype_id})"
 
 
 def get_duty_cycle(hours, available_hours):
@@ -508,8 +508,8 @@ def get_deleted_data_by_month(mwa_db, date_from, date_to):
 def do_plot_archive_volume_per_month(
     tap_service,
     mwa_db,
-    date_from,
-    date_to,
+    date_from: datetime,
+    date_to: datetime,
     title,
     cumulative,
     filename,
@@ -528,7 +528,7 @@ def do_plot_archive_volume_per_month(
 
     # If showing more than 6 months, make the stride longer
     if (date_to - date_from).days > (6 * 31):
-        stride_months = 3
+        stride_months = 2
     else:
         stride_months = 1
 
@@ -568,8 +568,8 @@ def do_plot_archive_volume_per_month(
         volume_bytes = this_bytes
 
         # Check striding
-        if row["reporting_month"] % stride_months == 0:
-            x_axis.append(f'{int(row["reporting_year"]):d}-{int(row["reporting_month"]):02d}')
+        if row["reporting_month"] % stride_months == 0:            
+            x_axis.append(f'{int(row["reporting_year"]):d}-{int(row["reporting_month"]):02d}')            
 
             if cumulative:
                 y_axis.append(bytes_to_terabytes(cumulative_volume_bytes))
@@ -849,7 +849,7 @@ def run_stats(config_filename):
         f" {bytes_to_terabytes(db_acacia_mwaingest_bytes + db_acacia_mwa_bytes + db_dmf_bytes + db_banksia_bytes)} TB"
     )
     logger.info("--------------------------------------------------")
-    acacia_mwaingest_percent_used = ((acacia_mwaingest_bytes) / acacia_mwaingest_quota_bytes) * 100.0
+    acacia_mwaingest_percent_used = 0 if acacia_mwaingest_quota_bytes==0 else (acacia_mwaingest_bytes / acacia_mwaingest_quota_bytes) * 100.0
     logger.info(
         "Acacia_mwaingest Quota Used:"
         f" {bytes_to_terabytes(acacia_mwaingest_bytes):.3f} TB /"
