@@ -1,5 +1,7 @@
 """This module is used to provide overall storage stats for the MWA Archive"""
 
+import os
+
 import argparse
 import json
 import logging
@@ -35,9 +37,9 @@ def get_s3_resource(profile, endpoint_url) -> boto3.resource:
     return session.resource("s3", endpoint_url=endpoint_url)
 
 
-def run_mc_du(profile: str, bucket_name: str) -> int:
+def run_mc_du(profile: str, bucket_name: str, minio_path: str) -> int:
     """Runs mc and appends output to filename"""
-    cmd = f"/home/gsleap/minio-binaries/mc du {profile}/{bucket_name} --json"
+    cmd = f"{minio_path} du {profile}/{bucket_name} --json"
 
     logger.info(f"{cmd}...")
 
@@ -66,7 +68,7 @@ def run_mc_du(profile: str, bucket_name: str) -> int:
     return size_bytes
 
 
-def get_acacia_usage(profile, endpoint_url) -> int:
+def get_acacia_usage(profile, endpoint_url, minio_path) -> int:
     """
     Returns the bytes used from the S3 endpoint
     """
@@ -78,7 +80,7 @@ def get_acacia_usage(profile, endpoint_url) -> int:
     s3_resource = get_s3_resource(profile, endpoint_url)
 
     bucket_list = [bucket.name for bucket in s3_resource.buckets.all()]
-    values = [(profile, bucket) for bucket in bucket_list]
+    values = [(profile, bucket, minio_path) for bucket in bucket_list]
 
     with mp.Pool(cpu_count) as pool:
         results = pool.starmap(run_mc_du, values)
@@ -106,7 +108,7 @@ def randomise_banksia_vss_profile(banksia_vss_endpoints: list) -> str:
     return f"banksia{banksia_vss_endpoints[vss][12]}"
 
 
-def get_banksia_usage(aws_profile, endpoint_urls: list):
+def get_banksia_usage(aws_profile, endpoint_urls: list, minio_path):
     """
     Returns the bytes used from the S3 endpoint
     as DMF, banksia
@@ -145,8 +147,8 @@ def get_banksia_usage(aws_profile, endpoint_urls: list):
     # in THIS case the "profile" is a MinIO profile! In mc, the profile defines
     # both the credentials AND the endpoint, so here we want to randomise the profile
     # so we run mc against different VSS's so we don't kill Banksia!
-    dmf_values = [(randomise_banksia_vss_profile(endpoint_urls), bucket) for bucket in dmf_buckets]
-    banksia_values = [(randomise_banksia_vss_profile(endpoint_urls), bucket) for bucket in banksia_buckets]
+    dmf_values = [(randomise_banksia_vss_profile(endpoint_urls), bucket, minio_path) for bucket in dmf_buckets]
+    banksia_values = [(randomise_banksia_vss_profile(endpoint_urls), bucket, minio_path) for bucket in banksia_buckets]
 
     with mp.Pool(cpu_count) as pool:
         banksia_results = pool.starmap(run_mc_du, banksia_values)
@@ -163,7 +165,7 @@ def get_banksia_usage(aws_profile, endpoint_urls: list):
     return dmf_total_size, banksia_total_size
 
 
-def get_location_summary_bytes(mwa_db):
+def get_location_summary_bytes(mwa_db: psycopg2.pool.ThreadedConnectionPool):
     """
     Returns the bytes stored for dmf, acacia and banksia
     from the database
@@ -205,21 +207,25 @@ def get_location_summary_bytes(mwa_db):
         if conn is not None:
             mwa_db.putconn(conn)
 
-    if len(results) == 3 or len(results) == 4:
-        for row in results:
-            if row[0] == "DMF":
-                dmf = row[1]
-            elif row[0] == "Acacia_mwaingest":
-                acacia_mwaingest = row[1]
-            elif row[0] == "Acacia_mwa":
-                acacia_mwa = row[1]
-            elif row[0] == "Banksia":
-                banksia = row[1]
-            else:
-                logger.info("Unexpected value!")
-                exit(-1)
+    if results:
+        if len(results) == 3 or len(results) == 4:
+            for row in results:
+                if row[0] == "DMF":
+                    dmf = row[1]
+                elif row[0] == "Acacia_mwaingest":
+                    acacia_mwaingest = row[1]
+                elif row[0] == "Acacia_mwa":
+                    acacia_mwa = row[1]
+                elif row[0] == "Banksia":
+                    banksia = row[1]
+                else:
+                    logger.info("Unexpected value!")
+                    exit(-1)
+        else:
+            logger.info("Error wrong number of rows!")
+            exit(-1)
     else:
-        logger.info("Error wrong number of rows!")
+        logger.info("No rows returned!")
         exit(-1)
 
     return dmf, acacia_mwaingest, acacia_mwa, banksia
@@ -307,9 +313,9 @@ def dump_stats(vo_service, filename):
             )
 
     logger.info(f"{i} rows written to {filename}.\n")
-    logger.info(f"Total data: { bytes_to_petabytes(total_bytes) } PB\n")
-    logger.info(f"Total time: { total_secs / 3600 } hours\n")
-    logger.info(f"Total deleted data: { bytes_to_petabytes(deleted_bytes) } PB\n")
+    logger.info(f"Total data: {bytes_to_petabytes(total_bytes)} PB\n")
+    logger.info(f"Total time: {total_secs / 3600} hours\n")
+    logger.info(f"Total deleted data: {bytes_to_petabytes(deleted_bytes)} PB\n")
 
 
 def dump_stats_by_project(local_db_conn, filename):
@@ -471,7 +477,7 @@ def clear_plots():
         plt.close(fig)
 
 
-def get_deleted_data_by_month(mwa_db, date_from, date_to):
+def get_deleted_data_by_month(mwa_db: psycopg2.pool.ThreadedConnectionPool, date_from: datetime, date_to: datetime):
     """Get the deleted data by month from a query"""
     conn = None
     results = None
@@ -507,7 +513,7 @@ def get_deleted_data_by_month(mwa_db, date_from, date_to):
 
 def do_plot_archive_volume_per_month(
     tap_service,
-    mwa_db,
+    mwa_db: psycopg2.pool.ThreadedConnectionPool,
     date_from: datetime,
     date_to: datetime,
     title,
@@ -558,18 +564,19 @@ def do_plot_archive_volume_per_month(
             # col 0 = Reporting Year
             # col 1 = Reporting Month
             # col 2 = sum(data deleted bytes)
-            for drow in deleted_results:
-                if row["reporting_year"] == drow[0] and row["reporting_month"] == drow[1]:
-                    deleted_bytes = int(drow[2])
-                    this_bytes -= deleted_bytes
-                    this_deleted_bytes = deleted_bytes
-                    cumulative_volume_bytes -= deleted_bytes
+            if deleted_results:
+                for drow in deleted_results:
+                    if row["reporting_year"] == drow[0] and row["reporting_month"] == drow[1]:
+                        deleted_bytes = int(drow[2])
+                        this_bytes -= deleted_bytes
+                        this_deleted_bytes = deleted_bytes
+                        cumulative_volume_bytes -= deleted_bytes
 
         volume_bytes = this_bytes
 
         # Check striding
-        if row["reporting_month"] % stride_months == 0:            
-            x_axis.append(f'{int(row["reporting_year"]):d}-{int(row["reporting_month"]):02d}')            
+        if row["reporting_month"] % stride_months == 0:
+            x_axis.append(f"{int(row['reporting_year']):d}-{int(row['reporting_month']):02d}")
 
             if cumulative:
                 y_axis.append(bytes_to_terabytes(cumulative_volume_bytes))
@@ -588,7 +595,7 @@ def do_plot_archive_volume_per_month(
             and row["reporting_month"] >= dump_month_from
             and row["reporting_month"] <= dump_month_to
         ):
-            logger.info("year, month, ingested-deleted, ingested, deleted, cuml" " archive volume(all in TB)")
+            logger.info("year, month, ingested-deleted, ingested, deleted, cuml archive volume(all in TB)")
 
             logger.info(
                 f"{row['reporting_year']},{row['reporting_month']},{bytes_to_terabytes(volume_bytes):.3f},"
@@ -616,7 +623,7 @@ def do_plot_archive_volume_per_project(tap_service, date_from, date_to, title, f
     labels = []
     x_values = []
     slice_no = 0
-    max_slices = 11
+    max_slices = 20
     other_bytes = 0
 
     results = do_query(
@@ -756,6 +763,11 @@ def run_stats(config_filename):
     config = ConfigParser()
     config.read(config_filename)
 
+    minio_path = config.get("S3", "minio_path")
+    if not os.path.exists(minio_path):
+        print(f"Path to minio not valid: {minio_path}")
+        exit(1)
+
     acacia_mwaingest_quota_bytes = config.getint("asvo_stats", "acacia_mwaingest_quota_bytes")
     acacia_mwa_quota_bytes = config.getint("asvo_stats", "acacia_mwa_quota_bytes")
     banksia_quota_bytes = config.getint("asvo_stats", "banksia_quota_bytes")
@@ -788,7 +800,7 @@ def run_stats(config_filename):
         acacia_mwaingest_endpoint_url = config.get("S3", "acacia_mwaingest_endpoint_url")
 
         logger.info("Getting stats from Acacia_mwaingest...")
-        acacia_mwaingest_bytes = get_acacia_usage(acacia_mwaingest_profile, acacia_mwaingest_endpoint_url)
+        acacia_mwaingest_bytes = get_acacia_usage(acacia_mwaingest_profile, acacia_mwaingest_endpoint_url, minio_path)
     else:
         logger.info("Skipping stats from Acacia_mwaingest (use_acacia_mwaingest != 1)")
         acacia_mwaingest_bytes = 0
@@ -798,7 +810,7 @@ def run_stats(config_filename):
         acacia_mwa_endpoint_url = config.get("S3", "acacia_mwa_endpoint_url")
 
         logger.info("Getting stats from Acacia_mwa...")
-        acacia_mwa_bytes = get_acacia_usage(acacia_mwa_profile, acacia_mwa_endpoint_url)
+        acacia_mwa_bytes = get_acacia_usage(acacia_mwa_profile, acacia_mwa_endpoint_url, minio_path)
     else:
         logger.info("Skipping stats from Acacia_mwa (use_acacia_mwa != 1)")
         acacia_mwa_bytes = 0
@@ -808,7 +820,7 @@ def run_stats(config_filename):
         banksia_endpoint_urls = str(config.get("S3", "banksia_endpoint_urls")).split(",")
 
         logger.info("Getting stats from Banksia...")
-        dmf_bytes, banksia_bytes = get_banksia_usage(banksia_profile, banksia_endpoint_urls)
+        dmf_bytes, banksia_bytes = get_banksia_usage(banksia_profile, banksia_endpoint_urls, minio_path)
     else:
         logger.info("Skipping stats from Banksia (use_banksia != 1)")
         dmf_bytes = 0
@@ -830,16 +842,13 @@ def run_stats(config_filename):
         f"Acacia mwa       vs DB         : {bytes_to_terabytes(acacia_mwa_bytes)} TB vs"
         f" {bytes_to_terabytes(db_acacia_mwa_bytes)} TB"
     )
+    logger.info(f"DMF vs DB            : {bytes_to_terabytes(dmf_bytes)} TB vs {bytes_to_terabytes(db_dmf_bytes)} TB")
     logger.info(
-        f"DMF vs DB            : {bytes_to_terabytes(dmf_bytes)} TB vs" f" {bytes_to_terabytes(db_dmf_bytes)} TB"
-    )
-    logger.info(
-        f"Banksia vs DB        : {bytes_to_terabytes(banksia_bytes)} TB vs"
-        f" {bytes_to_terabytes(db_banksia_bytes)} TB"
+        f"Banksia vs DB        : {bytes_to_terabytes(banksia_bytes)} TB vs {bytes_to_terabytes(db_banksia_bytes)} TB"
     )
     logger.info("--------------------------------------------------")
     logger.info(
-        f"Total Banksia vs DB  : {bytes_to_terabytes(dmf_bytes+banksia_bytes)} TB"
+        f"Total Banksia vs DB  : {bytes_to_terabytes(dmf_bytes + banksia_bytes)} TB"
         f" vs {bytes_to_terabytes(db_dmf_bytes + db_banksia_bytes)} TB"
     )
     logger.info("--------------------------------------------------")
@@ -849,7 +858,9 @@ def run_stats(config_filename):
         f" {bytes_to_terabytes(db_acacia_mwaingest_bytes + db_acacia_mwa_bytes + db_dmf_bytes + db_banksia_bytes)} TB"
     )
     logger.info("--------------------------------------------------")
-    acacia_mwaingest_percent_used = 0 if acacia_mwaingest_quota_bytes==0 else (acacia_mwaingest_bytes / acacia_mwaingest_quota_bytes) * 100.0
+    acacia_mwaingest_percent_used = (
+        0 if acacia_mwaingest_quota_bytes == 0 else (acacia_mwaingest_bytes / acacia_mwaingest_quota_bytes) * 100.0
+    )
     logger.info(
         "Acacia_mwaingest Quota Used:"
         f" {bytes_to_terabytes(acacia_mwaingest_bytes):.3f} TB /"
@@ -889,9 +900,9 @@ def run_stats(config_filename):
     pawsey_available_bytes = acacia_mwaingest_available_bytes + acacia_mwa_available_bytes + banksia_available_bytes
 
     logger.info(f"Acacia_mwaingest Quota Available: {bytes_to_terabytes(acacia_mwaingest_available_bytes):.3f} TB ")
-    logger.info(f"Acacia_mwa Quota Available      : {bytes_to_terabytes(acacia_mwa_available_bytes):.3f} TB ")
-    logger.info(f"Banksia Quota Available         : {bytes_to_terabytes(banksia_available_bytes):.3f} TB ")
-    logger.info(f"Pawsey Quota Available          : {bytes_to_terabytes(pawsey_available_bytes):.3f} TB ")
+    logger.info(f"Acacia_mwa Quota Available: {bytes_to_terabytes(acacia_mwa_available_bytes):.3f} TB ")
+    logger.info(f"Banksia Quota Available: {bytes_to_terabytes(banksia_available_bytes):.3f} TB ")
+    logger.info(f"Pawsey Quota Available: {bytes_to_terabytes(pawsey_available_bytes):.3f} TB ")
     logger.info("-------------------------------------------------------\n")
 
     # Either way show whats in the db
