@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 
 import argparse
-import numpy as np
-import matplotlib.pyplot as plt
-import os
 import csv
+import os
+
+import matplotlib.pyplot as plt
+import numpy as np
 
 parser = argparse.ArgumentParser(description='Plot archive usage broken down by'
                                   ' science theme.')

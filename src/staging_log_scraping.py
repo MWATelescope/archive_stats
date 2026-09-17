@@ -1,10 +1,9 @@
-import argparse
 import sqlite3
-from datetime import datetime
 from contextlib import closing
-import numpy as np
+from datetime import datetime
+
 import matplotlib.pyplot as plt
-from matplotlib import colors
+import numpy as np
 from matplotlib.ticker import PercentFormatter
 
 
@@ -121,7 +120,7 @@ def parse_mwadmget_log(filename, local_db_conn):
                         staging_seconds = float(line[start_pos:end_pos])
 
                         if staging_seconds < 1:
-                            staging_seconds = int(1)
+                            staging_seconds = 1
                         else:
                             staging_seconds = int(staging_seconds)
                     except ValueError as e:
