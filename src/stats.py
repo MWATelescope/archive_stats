@@ -171,24 +171,49 @@ def do_query(vo_service, adql_statement):
 def fetch_monthly_data(tap_service):
     """Fetch all monthly aggregates in a single TAP query (no date filter).
 
+    Observation-side aggregates are grouped by observation date (starttime_utc).
+    Download bytes come from obs_download_history grouped by actual download
+    date (datetime_mro), joined via FULL OUTER JOIN so months that appear in
+    only one table are still included.
+
     Returns a list of dicts with keys:
         reporting_year, reporting_month, total_secs,
         total_archived_bytes, files_deleted_bytes,
-        all_ingested_data_bytes, downloaded_bytes
+        all_ingested_data_bytes, downloaded_bytes,
+        download_count
     """
     logger.info("Fetching monthly data from TAP...")
     results = do_query(
         tap_service,
         """SELECT
-                date_part('year', date_trunc('day', starttime_utc)) as reporting_year
-                ,date_part('month', date_trunc('day', starttime_utc)) as reporting_month
-                ,COALESCE(SUM(duration), 0) as total_secs
-                ,COALESCE(SUM(total_archived_bytes), 0) as total_archived_bytes
-                ,COALESCE(SUM(files_deleted_bytes), 0) as files_deleted_bytes
-                ,COALESCE(SUM(total_archived_bytes + files_deleted_bytes), 0) as all_ingested_data_bytes
-                ,COALESCE(SUM(downloaded_bytes), 0) as downloaded_bytes
-            FROM mwa.observation
-            GROUP BY 1, 2
+                COALESCE(o.reporting_year, d.reporting_year) as reporting_year
+                ,COALESCE(o.reporting_month, d.reporting_month) as reporting_month
+                ,COALESCE(o.total_secs, 0) as total_secs
+                ,COALESCE(o.total_archived_bytes, 0) as total_archived_bytes
+                ,COALESCE(o.files_deleted_bytes, 0) as files_deleted_bytes
+                ,COALESCE(o.all_ingested_data_bytes, 0) as all_ingested_data_bytes
+                ,COALESCE(d.downloaded_bytes, 0) as downloaded_bytes
+                ,COALESCE(d.download_count, 0) as download_count
+            FROM (
+                SELECT
+                    date_part('year', date_trunc('day', starttime_utc)) as reporting_year
+                    ,date_part('month', date_trunc('day', starttime_utc)) as reporting_month
+                    ,COALESCE(SUM(duration), 0) as total_secs
+                    ,COALESCE(SUM(total_archived_bytes), 0) as total_archived_bytes
+                    ,COALESCE(SUM(files_deleted_bytes), 0) as files_deleted_bytes
+                    ,COALESCE(SUM(total_archived_bytes + files_deleted_bytes), 0) as all_ingested_data_bytes
+                FROM mwa.observation
+                GROUP BY 1, 2
+            ) o
+            FULL OUTER JOIN (
+                SELECT
+                    date_part('year', datetime_mro) as reporting_year
+                    ,date_part('month', datetime_mro) as reporting_month
+                    ,COALESCE(SUM(downloaded_bytes), 0) as downloaded_bytes
+                    ,COUNT(*) as download_count
+                FROM mwa.obs_download_history
+                GROUP BY 1, 2
+            ) d ON o.reporting_year = d.reporting_year AND o.reporting_month = d.reporting_month
             ORDER BY 1, 2""",
     )
     return [
@@ -200,6 +225,7 @@ def fetch_monthly_data(tap_service):
             "files_deleted_bytes": int(row["files_deleted_bytes"]),
             "all_ingested_data_bytes": int(row["all_ingested_data_bytes"]),
             "downloaded_bytes": int(row["downloaded_bytes"]),
+            "download_count": int(row["download_count"]),
         }
         for row in results
     ]
@@ -261,6 +287,29 @@ def fetch_daily_stats(tap_service):
             GROUP BY 1,2,3
             ORDER BY 1,2""",
     )
+
+
+def fetch_archive_bytes_by_mode(tap_service):
+    """Fetch total archived data bytes grouped by observation mode.
+
+    Returns a list of dicts with keys: mode, total_bytes
+    """
+    logger.info("Fetching archive bytes by mode from TAP...")
+    results = do_query(
+        tap_service,
+        """SELECT
+                mode
+                ,COALESCE(SUM(total_archived_data_bytes), 0) as total_bytes
+            FROM mwa.observation
+            GROUP BY mode""",
+    )
+    return [
+        {
+            "mode": row["mode"],
+            "total_bytes": int(row["total_bytes"]),
+        }
+        for row in results
+    ]
 
 
 def fetch_deleted_data_by_month(mwa_db):
@@ -651,7 +700,7 @@ def plot_archive_volume_per_month(
     logger.info(f"Saved {filename} to disk.")
 
 
-def plot_downloads_per_month(
+def plot_downloaded_data_per_month(
     monthly_data,
     date_from,
     date_to,
@@ -711,6 +760,64 @@ def plot_downloads_per_month(
     logger.info(f"Saved {filename} to disk.")
 
 
+def plot_download_count_per_month(
+    monthly_data,
+    date_from,
+    date_to,
+    title,
+    cumulative,
+    filename,
+):
+    """Plot number of downloads per month from pre-fetched data."""
+    clear_plots()
+
+    rows = filter_monthly_by_range(monthly_data, date_from, date_to)
+
+    x_axis = []
+    y_axis = []
+    cumulative_count = 0
+
+    stride_months = 2 if (date_to - date_from).days > (6 * 31) else 1
+    stride_accumulator = 0
+    stride_count = 0
+
+    for row in rows:
+        count = row["download_count"]
+        cumulative_count += count
+        stride_accumulator += count
+        stride_count += 1
+
+        # Check striding - step every N rows from start, not by calendar month parity
+        if stride_count % stride_months == 0:
+            x_axis.append(f"{row['reporting_year']:d}-{row['reporting_month']:02d}")
+
+            if cumulative:
+                y_axis.append(cumulative_count)
+            else:
+                y_axis.append(stride_accumulator)
+
+            stride_accumulator = 0
+
+    # Handle any trailing partial stride window so the last month(s) aren't dropped
+    if stride_accumulator > 0 and stride_count % stride_months != 0:
+        last = rows[-1]
+        x_axis.append(f"{last['reporting_year']:d}-{last['reporting_month']:02d}")
+        if cumulative:
+            y_axis.append(cumulative_count)
+        else:
+            y_axis.append(stride_accumulator)
+
+    fig, _ = plt.subplots()
+    plt.bar(x_axis, y_axis)
+    plt.title(f"{title} = {cumulative_count:,} (as at {time.strftime('%d-%b-%Y')})")
+    plt.xlabel("Time")
+    plt.xticks(rotation=90)
+    plt.ylabel("Number of Downloads")
+    fig.set_size_inches(18.5, 10.5)
+    plt.savefig(filename, dpi=DPI)
+    logger.info(f"Saved {filename} to disk.")
+
+
 def plot_archive_volume_per_project(project_data, title, filename):
     """Plot archive volume per project as a pie chart from pre-fetched data."""
     clear_plots()
@@ -737,11 +844,13 @@ def plot_archive_volume_per_project(project_data, title, filename):
     x_values.append(bytes_to_terabytes(other_bytes))
 
     fig, axis = plt.subplots()
+    fontsize = 14 if len(labels) < 10 else None
     axis.pie(
         x_values,
         labels=labels,
         autopct=lambda pct: pie_volume_format(pct, x_values),
         startangle=0,
+        textprops={"fontsize": fontsize} if fontsize else {},
     )
     axis.axis("equal")
 
@@ -775,14 +884,81 @@ def plot_telescope_time_per_project(project_data, title, filename):
     x_values.append(other_time)
 
     fig, axis = plt.subplots()
+    fontsize = 14 if len(labels) < 10 else None
     axis.pie(
         x_values,
         labels=labels,
         autopct=lambda pct: pie_hours_format(pct, x_values),
         startangle=0,
+        textprops={"fontsize": fontsize} if fontsize else {},
     )
     axis.axis("equal")
     plt.title(f"{title} by Project (as at {time.strftime('%d-%b-%Y')})")
+    fig.set_size_inches(18.5, 10.5)
+    plt.savefig(filename, dpi=DPI)
+    logger.info(f"Saved {filename} to disk.")
+
+
+def plot_archive_volume_per_data_type(mode_data, title, filename):
+    """Plot archive data volume by data type (mode) as a pie chart.
+
+    Categorises modes from fetch_archive_bytes_by_mode() into:
+        Raw Visibilities  = HW_LFILES, MWAX_CORRELATOR
+        Raw Voltages      = VOLTAGE_START, VOLTAGE_BUFFER, MWAX_VCS, MWAX_BUFFER
+        Beamformed        = MWAX_BEAMFORMER
+        Unknown           = anything else
+    """
+    clear_plots()
+
+    raw_vis_modes = {"HW_LFILES", "MWAX_CORRELATOR"}
+    raw_volt_modes = {"VOLTAGE_START", "VOLTAGE_BUFFER", "MWAX_VCS", "MWAX_BUFFER"}
+    beamformed_modes = {"MWAX_BEAMFORMER"}
+
+    raw_vis = 0
+    raw_volt = 0
+    beamformed = 0
+    unknown = 0
+
+    for row in mode_data:
+        mode = row["mode"]
+        total = row["total_bytes"]
+
+        if mode in raw_vis_modes:
+            raw_vis += total
+        elif mode in raw_volt_modes:
+            raw_volt += total
+        elif mode in beamformed_modes:
+            beamformed += total
+        else:
+            unknown += total
+
+    labels = ["Raw Visibilities", "Raw Voltages", "Beamformed", "Unknown"]
+    x_values = [
+        bytes_to_terabytes(raw_vis),
+        bytes_to_terabytes(raw_volt),
+        bytes_to_terabytes(beamformed),
+        bytes_to_terabytes(unknown),
+    ]
+
+    # Drop zero-valued slices so the chart isn't cluttered
+    non_zero = [(label, val) for label, val in zip(labels, x_values) if val > 0]
+    if not non_zero:
+        logger.warning("No data-type volume to plot.")
+        return
+    labels, x_values = zip(*non_zero)
+
+    fig, axis = plt.subplots()
+    fontsize = 14 if len(labels) < 10 else None
+    axis.pie(
+        x_values,
+        labels=labels,
+        autopct=lambda pct: pie_volume_format(pct, x_values),
+        startangle=0,
+        textprops={"fontsize": fontsize} if fontsize else {},
+    )
+    axis.axis("equal")
+
+    plt.title(f"{title} (as at {time.strftime('%d-%b-%Y')})")
     fig.set_size_inches(18.5, 10.5)
     plt.savefig(filename, dpi=DPI)
     logger.info(f"Saved {filename} to disk.")
@@ -928,12 +1104,14 @@ def run_stats(config_filename, no_pawsey: bool = False):
     project_data_6mo = fetch_project_data(mwa_tap_service, six_months_ago, today)
     deleted_data = fetch_deleted_data_by_month(mwa_db)
     deleted_lookup = build_deleted_lookup(deleted_data)
+    mode_data = fetch_archive_bytes_by_mode(mwa_tap_service)
 
     logger.info(
         f"Fetched {len(monthly_data)} monthly rows, "
         f"{len(project_data_all)} projects (all time), "
         f"{len(project_data_6mo)} projects (6 mo), "
-        f"{len(deleted_data)} deleted-data months."
+        f"{len(deleted_data)} deleted-data months, "
+        f"{len(mode_data)} modes."
     )
 
     # ---------------------------------------------------------------
@@ -947,23 +1125,42 @@ def run_stats(config_filename, no_pawsey: bool = False):
     # Plots (use pre-fetched data, filter in Python)
     # ---------------------------------------------------------------
 
-    # Downloads
-    plot_downloads_per_month(
+    # Downloaded data
+    plot_downloaded_data_per_month(
         monthly_data,
         start_date,
         today,
-        "Downloads per month (all time)",
+        "Downloaded Data per month (all time)",
         False,
-        "mwa_downloads_per_month_all_time.png",
+        "mwa_downloaded_data_per_month_all_time.png",
     )
 
-    plot_downloads_per_month(
+    plot_downloaded_data_per_month(
         monthly_data,
         start_date,
         today,
-        "Cumulative downloads per month (all time)",
+        "Cumulative downloaded data per month (all time)",
         True,
-        "mwa_downloads_per_month_all_time_cuml.png",
+        "mwa_downloaded_data_per_month_all_time_cuml.png",
+    )
+
+    # Download counts
+    plot_download_count_per_month(
+        monthly_data,
+        start_date,
+        today,
+        "Number of Downloads per month (all time)",
+        False,
+        "mwa_download_count_per_month_all_time.png",
+    )
+
+    plot_download_count_per_month(
+        monthly_data,
+        start_date,
+        today,
+        "Cumulative Number of Downloads per month (all time)",
+        True,
+        "mwa_download_count_per_month_all_time_cuml.png",
     )
 
     # Archive volume — all time
@@ -998,6 +1195,13 @@ def run_stats(config_filename, no_pawsey: bool = False):
         project_data_all,
         "MWA Telescope Time (all time)",
         "mwa_telescope_time_all_time.png",
+    )
+
+    # Archive volume by data type
+    plot_archive_volume_per_data_type(
+        mode_data,
+        "MWA Archive Volume by Data Type",
+        "mwa_archive_volume_by_data_type.png",
     )
 
     # Archive volume — last 6 months
