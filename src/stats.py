@@ -10,8 +10,10 @@ import random
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from configparser import ConfigParser
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import boto3
@@ -23,8 +25,36 @@ import psycopg2.pool
 import pyvo as vo
 from dateutil.relativedelta import relativedelta
 
-DPI = 100
+# ---------------------------------------------------------------------------
+# 2. CONSTANTS
+# ---------------------------------------------------------------------------
 AWST = ZoneInfo("Australia/Perth")
+CORRELATOR_FILETYPE = 8
+LEGACY_FP32_START = datetime(2013, 7, 1, tzinfo=AWST)
+LEGACY_INT32_START = datetime(2014, 10, 15, tzinfo=AWST)
+LEGACY_INT32_COMPRESSED_START = datetime(2017, 11, 1, tzinfo=AWST)
+
+BYTES_PER_TB = 1000.0**4
+BYTES_PER_PB = BYTES_PER_TB * 1000.0
+YEARLY_TABLE_ROW_FORMAT = "{year:<6}\t{ingest:>14}\t{deleted:>14}\t{net:>14}\t{total:>18}"
+
+DPI = 100
+
+GPS_EPOCH_UTC = datetime(1980, 1, 6, tzinfo=UTC)
+# (UTC instant from which the offset applies, GPS time minus UTC in seconds). Valid from 2012-07-01 onwards.
+# Add a row if a new leap second is ever announced.
+GPS_MINUS_UTC_TABLE = (
+    (datetime(2012, 7, 1, tzinfo=UTC), 16),
+    (datetime(2015, 7, 1, tzinfo=UTC), 17),
+    (datetime(2017, 1, 1, tzinfo=UTC), 18),
+)
+
+FILE_TYPE_TABLE_ROW_FORMAT = (
+    "{label:<70}\t{count:>14}\t{min_tb:>14}\t{mean_tb:>14}\t{median_tb:>14}\t{max_tb:>14}\t{total_tb:>16}"
+)
+FILE_TYPE_TABLE_SIZE_DECIMALS = 6
+FILE_TYPE_TABLE_TOTAL_DECIMALS = 3
+MEDIAN_QUANTILE = 0.5
 
 logger = logging.getLogger("archive_stats")
 logger.setLevel(logging.DEBUG)
@@ -163,7 +193,7 @@ def get_banksia_usage(aws_profile, endpoint_urls: list, minio_path):
 # ---------------------------------------------------------------------------
 
 
-def do_query(vo_service, adql_statement):
+def do_adql_query(vo_service, adql_statement):
     """Given a VO service object, run the ADQL and return the results"""
     return vo_service.search(adql_statement)
 
@@ -183,7 +213,7 @@ def fetch_monthly_data(tap_service):
         download_count
     """
     logger.info("Fetching monthly data from TAP...")
-    results = do_query(
+    results = do_adql_query(
         tap_service,
         """SELECT
                 COALESCE(o.reporting_year, d.reporting_year) as reporting_year
@@ -245,7 +275,7 @@ def fetch_project_data(tap_service, date_from=None, date_to=None):
     label = f" ({date_from} to {date_to})" if date_from else " (all time)"
     logger.info(f"Fetching project data from TAP{label}...")
 
-    results = do_query(
+    results = do_adql_query(
         tap_service,
         f"""SELECT
                 projectid
@@ -274,7 +304,7 @@ def fetch_daily_stats(tap_service):
     so it remains its own TAP call.
     """
     logger.info("Fetching daily stats from TAP...")
-    return do_query(
+    return do_adql_query(
         tap_service,
         """SELECT
                 date_trunc('day', starttime_utc) As reporting_date
@@ -295,11 +325,11 @@ def fetch_archive_bytes_by_mode(tap_service):
     Returns a list of dicts with keys: mode, total_bytes
     """
     logger.info("Fetching archive bytes by mode from TAP...")
-    results = do_query(
+    results = do_adql_query(
         tap_service,
         """SELECT
                 mode
-                ,COALESCE(SUM(total_archived_data_bytes), 0) as total_bytes
+                ,COALESCE(SUM(total_archived_bytes), 0) as total_bytes
             FROM mwa.observation
             GROUP BY mode""",
     )
@@ -331,7 +361,7 @@ def fetch_deleted_data_by_month(mwa_db):
                 ,date_part('month', date_trunc('day', deleted_timestamp)) as reporting_month
                 ,COALESCE(SUM(size), 0) as deleted_bytes
             FROM data_files
-            WHERE deleted_timestamp IS NOT NULL
+            WHERE deleted_timestamp IS NOT NULL AND deleted_timestamp >= '2013-07-01'
             GROUP BY 1, 2
             ORDER BY 1, 2
             """
@@ -359,7 +389,7 @@ def fetch_deleted_data_by_month(mwa_db):
 def get_location_summary_bytes(mwa_tap):
     """Returns the bytes stored for acacia and banksia from the database"""
     logger.info("Running query to get location stats...")
-    results = do_query(
+    results = do_adql_query(
         mwa_tap,
         """SELECT SUM(archived_bytes_at_pawsey_banksia) as banksia,
                   SUM(archived_bytes_at_pawsey_acacia_mwa) as acacia_mwa
@@ -374,6 +404,292 @@ def get_location_summary_bytes(mwa_tap):
         sys.exit(-1)
 
     return acacia_mwa, banksia
+
+
+@dataclass(frozen=True)
+class CorrelatorEra:
+    """A range of raw correlator observations, as GPS seconds (start inclusive, end exclusive)."""
+
+    label: str
+    gps_start: int | None
+    gps_end: int | None
+
+
+@dataclass(frozen=True)
+class FileTypeStats:
+    """Size statistics for one data type. All sizes are in bytes."""
+
+    label: str
+    file_count: int
+    min_bytes: int
+    mean_bytes: float
+    median_bytes: int
+    max_bytes: int
+    total_bytes: int
+
+
+def datetime_to_gps_seconds(when: datetime) -> int:
+    """Convert a timezone-aware datetime to GPS seconds.
+
+    Args:
+        when: A timezone-aware datetime. It must be on or after 2012-07-01 UTC.
+
+    Returns:
+        The GPS time in whole seconds.
+
+    Raises:
+        ValueError: If `when` is before the first entry of GPS_MINUS_UTC_TABLE.
+    """
+    when_utc = when.astimezone(UTC)
+    gps_minus_utc = None
+    for effective_from, offset_secs in GPS_MINUS_UTC_TABLE:
+        if when_utc >= effective_from:
+            gps_minus_utc = offset_secs
+    if gps_minus_utc is None:
+        raise ValueError(f"{when} is before the first entry of GPS_MINUS_UTC_TABLE")
+    return int((when_utc - GPS_EPOCH_UTC).total_seconds()) + gps_minus_utc
+
+
+def build_correlator_eras() -> list[CorrelatorEra]:
+    """Build the date ranges that raw correlator files (filetype 8) are split into.
+
+    The first era catches files before the first split date, so no file is silently dropped.
+
+    Returns:
+        The eras, oldest first.
+    """
+    fp32_start = datetime_to_gps_seconds(LEGACY_FP32_START)
+    int32_start = datetime_to_gps_seconds(LEGACY_INT32_START)
+    compressed_start = datetime_to_gps_seconds(LEGACY_INT32_COMPRESSED_START)
+    return [
+        CorrelatorEra(f"before {LEGACY_FP32_START:%d-%b-%Y}", None, fp32_start),
+        CorrelatorEra("Legacy correlator fp32", fp32_start, int32_start),
+        CorrelatorEra("Legacy correlator int32", int32_start, compressed_start),
+        CorrelatorEra("Legacy correlator int32 compressed", compressed_start, None),
+    ]
+
+
+def build_file_slices(obsid_column: str, filetype_column: str) -> list[tuple[str, str]]:
+    """Build the WHERE expressions that split the files into the rows of the tables.
+
+    Args:
+        obsid_column: Name of the observation id (GPS seconds) column, as it is used in the query.
+        filetype_column: Name of the file type column, as it is used in the query.
+
+    Returns:
+        A list of (era label, WHERE expression). The first entry is every file type except raw
+        correlator, with an empty era label. The others are one per raw correlator era.
+    """
+    slices = [("", f"{filetype_column} <> {CORRELATOR_FILETYPE}")]
+    for era in build_correlator_eras():
+        conditions = [f"{filetype_column} = {CORRELATOR_FILETYPE}"]
+        if era.gps_start is not None:
+            conditions.append(f"{obsid_column} >= {era.gps_start}")
+        if era.gps_end is not None:
+            conditions.append(f"{obsid_column} < {era.gps_end}")
+        slices.append((era.label, " AND ".join(conditions)))
+    return slices
+
+
+def format_file_type_label(filetype: int, description: str | None, era_label: str) -> str:
+    """Build the Data Type label for a table row."""
+    label = f"{filetype} - {description if description else 'unknown'}"
+    return f"{label} [{era_label}]" if era_label else label
+
+
+def adql_median_size(tap_service, where_clause: str, file_count: int, min_size: int, max_size: int) -> int:
+    """Find the median file size with COUNT queries only, because ADQL has no median function.
+
+    This is a bisection on the size value. The result is the lower median: the smallest size S where at
+    least half of the files are no larger than S. It is the same as Postgres percentile_disc(0.5).
+
+    Args:
+        tap_service: A pyvo TAPService.
+        where_clause: WHERE expression (without the word WHERE) that selects the files.
+        file_count: Number of files selected by `where_clause`.
+        min_size: Smallest size in bytes of the selected files.
+        max_size: Largest size in bytes of the selected files.
+
+    Returns:
+        The median file size in bytes.
+    """
+    target_count = (file_count + 1) // 2
+    low = min_size
+    high = max_size
+    while low < high:
+        mid = (low + high) // 2
+        results = do_adql_query(
+            tap_service,
+            f"SELECT COUNT(*) AS n FROM mwa.obs_data_file WHERE {where_clause} AND archived_size <= {mid}",
+        )
+        if int(results[0]["n"]) >= target_count:
+            high = mid
+        else:
+            low = mid + 1
+    return low
+
+
+def fetch_file_type_stats_tap(tap_service) -> list[FileTypeStats]:
+    """Fetch size statistics per data type from the TAP service.
+
+    Args:
+        tap_service: A pyvo TAPService.
+
+    Returns:
+        One FileTypeStats per data type. Raw correlator files are split by era.
+    """
+    logger.info("Fetching file type statistics from TAP...")
+    stats = []
+    for era_label, where_clause in build_file_slices("obs_id", "filetype"):
+        logger.info(f"...Fetching statistics for era: {era_label}")
+        results = do_adql_query(
+            tap_service,
+            f"""SELECT
+                    filetype
+                    ,filetypedescription
+                    ,COUNT(*) AS file_count
+                    ,MIN(archived_size) AS min_size
+                    ,AVG(archived_size) AS mean_size
+                    ,MAX(archived_size) AS max_size
+                    ,SUM(archived_size) AS total_size
+                FROM mwa.obs_data_file
+                WHERE {where_clause}
+                GROUP BY filetype, filetypedescription
+                ORDER BY filetype""",
+        )
+        for row in results:
+            filetype = int(row["filetype"])
+            label = format_file_type_label(filetype, row["filetypedescription"], era_label)
+            logger.info(f"Finding median size for {label}...")
+            median_bytes = adql_median_size(
+                tap_service,
+                f"{where_clause} AND filetype = {filetype}",
+                int(row["file_count"]),
+                int(row["min_size"]),
+                int(row["max_size"]),
+            )
+            stats.append(
+                FileTypeStats(
+                    label=label,
+                    file_count=int(row["file_count"]),
+                    min_bytes=int(row["min_size"]),
+                    mean_bytes=float(row["mean_size"]),
+                    median_bytes=median_bytes,
+                    max_bytes=int(row["max_size"]),
+                    total_bytes=int(row["total_size"]),
+                )
+            )
+    return stats
+
+
+def fetch_file_type_stats_db(mwa_db) -> list[FileTypeStats]:
+    """Fetch size statistics per data type from the MWA database.
+
+    Every row of data_files is counted, including deleted files.
+
+    Args:
+        mwa_db: A psycopg2 connection pool for the MWA database.
+
+    Returns:
+        One FileTypeStats per data type. Raw correlator files are split by era.
+        An empty list if the query failed.
+    """
+    logger.info("Fetching file type statistics from database...")
+    conn = None
+    stats = []
+
+    try:
+        conn = mwa_db.getconn()
+        with conn.cursor() as cursor:
+            for era_label, where_clause in build_file_slices("f.observation_num", "f.filetype"):
+                logger.info(f"...Fetching statistics for era: {era_label}")
+                cursor.execute(
+                    f"""
+                    SELECT
+                        f.filetype
+                        ,t.description
+                        ,COUNT(*)
+                        ,MIN(f.size)
+                        ,AVG(f.size)
+                        ,percentile_disc({MEDIAN_QUANTILE}) WITHIN GROUP (ORDER BY f.size)
+                        ,MAX(f.size)
+                        ,SUM(f.size)
+                    FROM data_files f
+                    LEFT JOIN data_file_types t ON t.type = f.filetype
+                    WHERE {where_clause} AND remote_archived=True AND deleted_timestamp IS NULL
+                    GROUP BY f.filetype, t.description
+                    ORDER BY f.filetype
+                    """
+                )
+                for row in cursor.fetchall():
+                    stats.append(
+                        FileTypeStats(
+                            label=format_file_type_label(int(row[0]), row[1], era_label),
+                            file_count=int(row[2]),
+                            min_bytes=int(row[3]),
+                            mean_bytes=float(row[4]),
+                            median_bytes=int(row[5]),
+                            max_bytes=int(row[6]),
+                            total_bytes=int(row[7]),
+                        )
+                    )
+    except (psycopg2.DatabaseError, psycopg2.OperationalError) as error:
+        logger.error(error)
+        return []
+    finally:
+        if conn is not None:
+            mwa_db.putconn(conn)
+
+    return stats
+
+
+def print_file_type_table(title: str, stats: list[FileTypeStats]) -> None:
+    """Print a table of file type statistics to the console, with sizes in TB.
+
+    Args:
+        title: Heading printed above the table.
+        stats: Rows from fetch_file_type_stats_tap() or fetch_file_type_stats_db().
+    """
+    size_format = f",.{FILE_TYPE_TABLE_SIZE_DECIMALS}f"
+    total_format = f",.{FILE_TYPE_TABLE_TOTAL_DECIMALS}f"
+    header = FILE_TYPE_TABLE_ROW_FORMAT.format(
+        label="Data Type",
+        count="Count",
+        min_tb="Min (TB)",
+        mean_tb="Mean (TB)",
+        median_tb="Median (TB)",
+        max_tb="Max (TB)",
+        total_tb="Total (TB)",
+    )
+    separator = "-" * len(header.expandtabs())
+
+    print(f"\n{title}")
+    print(header)
+    print(separator)
+    for row in stats:
+        print(
+            FILE_TYPE_TABLE_ROW_FORMAT.format(
+                label=row.label,
+                count=f"{row.file_count:,}",
+                min_tb=f"{bytes_to_terabytes(row.min_bytes):{size_format}}",
+                mean_tb=f"{bytes_to_terabytes(row.mean_bytes):{size_format}}",
+                median_tb=f"{bytes_to_terabytes(row.median_bytes):{size_format}}",
+                max_tb=f"{bytes_to_terabytes(row.max_bytes):{size_format}}",
+                total_tb=f"{bytes_to_terabytes(row.total_bytes):{total_format}}",
+            )
+        )
+    print(separator)
+    print(
+        FILE_TYPE_TABLE_ROW_FORMAT.format(
+            label="All",
+            count=f"{sum(row.file_count for row in stats):,}",
+            min_tb="",
+            mean_tb="",
+            median_tb="",
+            max_tb="",
+            total_tb=f"{bytes_to_terabytes(sum(row.total_bytes for row in stats)):{total_format}}",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -457,14 +773,14 @@ def bytes_to_terabytes(bytes_value):
     """Convert bytes to TB"""
     if bytes_value is None:
         return 0.0
-    return float(bytes_value) / (1000.0**4)
+    return float(bytes_value) / BYTES_PER_TB
 
 
 def bytes_to_petabytes(bytes_value):
     """Convert bytes to PB"""
     if bytes_value is None:
         return 0.0
-    return float(bytes_value) / (1000.0**5)
+    return float(bytes_value) / BYTES_PER_PB
 
 
 def pie_hours_format(pct, allvals):
@@ -488,6 +804,72 @@ def pie_volume_format(pct, allvals):
 # ---------------------------------------------------------------------------
 # CSV dump functions — take pre-fetched data, not service handles
 # ---------------------------------------------------------------------------
+def build_yearly_summary(monthly_data, deleted_lookup):
+    """Aggregate ingest and deleted bytes per calendar year.
+
+    Args:
+        monthly_data: Rows from fetch_monthly_data().
+        deleted_lookup: {(year, month): deleted_bytes} from build_deleted_lookup().
+
+    Returns:
+        A list of dicts with keys: year, ingest_bytes, deleted_bytes, net_bytes, total_bytes.
+        total_bytes is the cumulative net volume at the end of that year.
+    """
+    ingest_by_year: dict[int, int] = defaultdict(int)
+    deleted_by_year: dict[int, int] = defaultdict(int)
+
+    for row in monthly_data:
+        ingest_by_year[row["reporting_year"]] += row["all_ingested_data_bytes"]
+    for (year, _month), deleted_bytes in deleted_lookup.items():
+        deleted_by_year[year] += deleted_bytes
+
+    summary = []
+    total_bytes = 0
+    for year in sorted(set(ingest_by_year) | set(deleted_by_year)):
+        net_bytes = ingest_by_year[year] - deleted_by_year[year]
+        total_bytes += net_bytes
+        summary.append(
+            {
+                "year": year,
+                "ingest_bytes": ingest_by_year[year],
+                "deleted_bytes": deleted_by_year[year],
+                "net_bytes": net_bytes,
+                "total_bytes": total_bytes,
+            }
+        )
+    return summary
+
+
+def print_yearly_summary(monthly_data, deleted_lookup):
+    """Print a per-year table of ingest, deleted, net and total volume to the console.
+
+    The current year is marked with '*' because its total is as at today, not 31-Dec.
+
+    Args:
+        monthly_data: Rows from fetch_monthly_data().
+        deleted_lookup: {(year, month): deleted_bytes} from build_deleted_lookup().
+    """
+    current_year = datetime.now(tz=AWST).year
+    header = YEARLY_TABLE_ROW_FORMAT.format(
+        year="Year", ingest="Ingest (TB)", deleted="Deleted (TB)", net="Net (TB)", total="Total at 31-Dec (TB)"
+    )
+    separator = "-" * len(header)
+
+    print(header)
+    print(separator)
+    for row in build_yearly_summary(monthly_data, deleted_lookup):
+        year_label = f"{row['year']}{'*' if row['year'] == current_year else ''}"
+        print(
+            YEARLY_TABLE_ROW_FORMAT.format(
+                year=year_label,
+                ingest=f"{bytes_to_terabytes(row['ingest_bytes']):,.3f}",
+                deleted=f"{bytes_to_terabytes(row['deleted_bytes']):,.3f}",
+                net=f"{bytes_to_terabytes(row['net_bytes']):,.3f}",
+                total=f"{bytes_to_terabytes(row['total_bytes']):,.3f}",
+            )
+        )
+    print(separator)
+    print(f"* {current_year} total is as at {datetime.now(tz=AWST):%d-%b-%Y}, not 31-Dec.")
 
 
 def dump_stats(daily_data, filename):
@@ -999,8 +1381,8 @@ def run_stats(config_filename, no_pawsey: bool = False):
 
     # Example of the expected format is: 01-Jul-2022
     # NOTE: keeping these in case I have a use for them later!
-    _special_date_from = datetime.strptime(config.get("asvo_stats", "special_date_from"), "%d-%b-%Y").astimezone(AWST)
-    _special_date_to = datetime.strptime(config.get("asvo_stats", "special_date_to"), "%d-%b-%Y").astimezone(AWST)
+    special_date_from = datetime.strptime(config.get("asvo_stats", "special_date_from"), "%d-%b-%Y").astimezone(AWST)
+    special_date_to = datetime.strptime(config.get("asvo_stats", "special_date_to"), "%d-%b-%Y").astimezone(AWST)
 
     today = datetime.now(tz=AWST)
     start_date = datetime(2006, 1, 1, tzinfo=AWST)
@@ -1098,6 +1480,8 @@ def run_stats(config_filename, no_pawsey: bool = False):
     # ---------------------------------------------------------------
     # Fetch data once
     # ---------------------------------------------------------------
+    filetype_db_data = fetch_file_type_stats_db(mwa_db)
+    filetype_tap_data = fetch_file_type_stats_tap(mwa_tap_service)
     monthly_data = fetch_monthly_data(mwa_tap_service)
     daily_data = fetch_daily_stats(mwa_tap_service)
     project_data_all = fetch_project_data(mwa_tap_service)
@@ -1117,6 +1501,9 @@ def run_stats(config_filename, no_pawsey: bool = False):
     # ---------------------------------------------------------------
     # CSV dumps (use pre-fetched data)
     # ---------------------------------------------------------------
+    print_file_type_table("File type summary from TAP (mwa.obs_data_file)", filetype_tap_data)
+    print_file_type_table("File type summary from the MWA database (data_files)", filetype_db_data)
+    print_yearly_summary(monthly_data, deleted_lookup)
     dump_stats(daily_data, "stats.csv")
     dump_monthly_stats(monthly_data, "stats_by_month.csv")
     dump_stats_by_project(project_data_all, "stats_by_project.csv")
@@ -1181,8 +1568,52 @@ def run_stats(config_filename, no_pawsey: bool = False):
         today,
         "MWA Archive Ingest (all time)",
         True,
-        "mwa_archive_ingest_all_time.png",
+        "mwa_archive_ingest_all_time_cuml.png",
         True,
+    )
+
+    plot_archive_volume_per_month(
+        monthly_data,
+        deleted_lookup,
+        special_date_from,
+        special_date_to,
+        f"MWA Archive Ingest ({special_date_from} - {special_date_to})",
+        False,
+        "mwa_archive_ingest_special.png",
+        True,
+    )
+
+    plot_archive_volume_per_month(
+        monthly_data,
+        deleted_lookup,
+        special_date_from,
+        special_date_to,
+        f"MWA Archive Ingest ({special_date_from} - {special_date_to})",
+        True,
+        "mwa_archive_ingest_special_cuml.png",
+        True,
+    )
+
+    plot_archive_volume_per_month(
+        monthly_data,
+        deleted_lookup,
+        special_date_from,
+        special_date_to,
+        f"MWA Archive Volume ({special_date_from} - {special_date_to})",
+        False,
+        "mwa_archive_volume_special.png",
+        False,
+    )
+
+    plot_archive_volume_per_month(
+        monthly_data,
+        deleted_lookup,
+        special_date_from,
+        special_date_to,
+        f"MWA Archive Volume ({special_date_from} - {special_date_to})",
+        True,
+        "mwa_archive_volume_special_cuml.png",
+        False,
     )
 
     # Per-project — all time
