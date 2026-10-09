@@ -36,8 +36,7 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
                 ,COALESCE(o.reporting_month, d.reporting_month) as reporting_month
                 ,COALESCE(o.total_secs, 0) as total_secs
                 ,COALESCE(o.total_archived_bytes, 0) as total_archived_bytes
-                ,COALESCE(o.files_deleted_bytes, 0) as files_deleted_bytes
-                ,COALESCE(o.all_ingested_bytes, 0) as all_ingested_bytes
+                ,COALESCE(o.files_deleted_bytes, 0) as files_deleted_bytes                
                 ,COALESCE(d.downloaded_bytes, 0) as downloaded_bytes
                 ,COALESCE(d.download_count, 0) as download_count
             FROM (
@@ -47,7 +46,6 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
                     ,COALESCE(SUM(duration), 0) as total_secs
                     ,COALESCE(SUM(total_archived_bytes), 0) as total_archived_bytes
                     ,COALESCE(SUM(files_deleted_bytes), 0) as files_deleted_bytes
-                    ,COALESCE(SUM(total_archived_bytes + files_deleted_bytes), 0) as all_ingested_bytes
                 FROM mwa.observation
                 GROUP BY 1, 2
             ) o
@@ -69,7 +67,7 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
             "total_secs": int(row["total_secs"]),
             "total_archived_bytes": int(row["total_archived_bytes"]),
             "files_deleted_bytes": int(row["files_deleted_bytes"]),
-            "all_ingested_bytes": int(row["all_ingested_bytes"]),
+            "all_ingested_bytes": int(row["total_archived_bytes"]) + int(row["downloaded_bytes"]),
             "downloaded_bytes": int(row["downloaded_bytes"]),
             "download_count": int(row["download_count"]),
         }

@@ -5,7 +5,16 @@ import psycopg
 from psycopg import sql
 from psycopg_pool import ConnectionPool
 
-from core import MEDIAN_QUANTILE, FileTypeStats, build_filetype_slice_where_clauses, format_file_type_label
+from core import (
+    MEDIAN_QUANTILE,
+    FileSizeBin,
+    FileTypeStats,
+    build_file_size_bin_edges,
+    build_file_size_bins,
+    build_filetype_slice_where_clauses,
+    format_file_type_label,
+    get_filetype_order,
+)
 
 logger = logging.getLogger("archive_stats")
 
@@ -94,6 +103,7 @@ def fetch_file_type_stats_from_db(mwa_db: ConnectionPool) -> list[FileTypeStats]
 
     Returns:
         One FileTypeStats per data type. Raw correlator files are split by era.
+        It is sorted by display order.
         An empty list if the query failed.
     """
     logger.info("Fetching file type statistics from database...")
@@ -101,7 +111,9 @@ def fetch_file_type_stats_from_db(mwa_db: ConnectionPool) -> list[FileTypeStats]
 
     try:
         with mwa_db.connection() as conn, conn.cursor() as cursor:
-            for era_label, where_clause in build_filetype_slice_where_clauses("f.observation_num", "f.filetype"):
+            for era_label, where_clause, display_order_modifier in build_filetype_slice_where_clauses(
+                "f.observation_num", "f.filetype"
+            ):
                 logger.info(f"...Fetching statistics for era: {era_label}")
                 # where_clause is built from internal constants only (see core.build_filetype_slice_where_clauses).
                 where_sql = sql.SQL(cast(LiteralString, where_clause))
@@ -124,19 +136,69 @@ def fetch_file_type_stats_from_db(mwa_db: ConnectionPool) -> list[FileTypeStats]
                     """
                 )
                 for row in cursor.fetchall():
+                    try:
+                        filetype_order = get_filetype_order().index(int(row[0]))
+                    except ValueError:
+                        filetype_order = 999  # unknown file type, put it at the end
+                        logger.warning(
+                            f"Unknown file type {row[0]} found in database, putting it at the end of the table."
+                        )
+
                     stats.append(
                         FileTypeStats(
                             label=format_file_type_label(int(row[0]), row[1], era_label),
+                            filetype=int(row[0]),
                             file_count=int(row[2]),
                             min_bytes=int(row[3]),
                             mean_bytes=float(row[4]),
                             median_bytes=int(row[5]),
                             max_bytes=int(row[6]),
                             total_bytes=int(row[7]),
+                            display_order=filetype_order + display_order_modifier,
                         )
                     )
     except (psycopg.DatabaseError, psycopg.OperationalError) as error:
         logger.error(error)
         return []
 
+    # sort the stats by display_order
+    stats.sort(key=lambda s: s.display_order)
+
     return stats
+
+
+def fetch_file_size_histogram_from_db(mwa_db: ConnectionPool) -> list[FileSizeBin]:
+    """Fetch the number of files per file size range from the MWA database.
+
+    The files are counted in the database, so the rows of the data_files table are not transferred. Excludes deleted
+    files and files that are not archived remotely.
+
+    Args:
+        mwa_db: A psycopg connection pool for the MWA database.
+
+    Returns:
+        One FileSizeBin per size range, smallest files first, including the ranges that have no files. An empty list
+        if the query failed.
+    """
+    logger.info("Fetching file size histogram from database...")
+    edges = build_file_size_bin_edges()
+
+    try:
+        with mwa_db.connection() as conn:
+            cursor = conn.execute(
+                t"""
+                SELECT
+                    width_bucket(size, {edges}::bigint[]) AS bucket
+                    ,COUNT(*)
+                FROM data_files
+                WHERE remote_archived=True AND deleted_timestamp IS NULL AND size IS NOT NULL
+                GROUP BY 1
+                ORDER BY 1
+                """
+            )
+            bucket_counts = {int(row[0]): int(row[1]) for row in cursor.fetchall()}
+    except (psycopg.DatabaseError, psycopg.OperationalError) as error:
+        logger.error(error)
+        return []
+
+    return build_file_size_bins(edges, bucket_counts)

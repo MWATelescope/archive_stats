@@ -10,6 +10,7 @@ LEGACY_INT32_START = datetime(2014, 10, 15, tzinfo=AWST)
 LEGACY_INT32_COMPRESSED_START = datetime(2017, 11, 1, tzinfo=AWST)
 CORRELATOR_FILETYPE = 8
 
+BYTES_PER_KB = 1000.0
 BYTES_PER_MB = 1000.0**2
 BYTES_PER_GB = BYTES_PER_MB * 1000.0
 BYTES_PER_TB = BYTES_PER_GB * 1000.0
@@ -24,6 +25,21 @@ FILE_TYPE_TABLE_ROW_FORMAT = (
 FILE_TYPE_TABLE_SIZE_DECIMALS = 3
 FILE_TYPE_TABLE_TOTAL_DECIMALS = 3
 MEDIAN_QUANTILE = 0.5
+
+# File size histogram bins: the lower edges are mantissa * 10**exponent bytes, e.g. 1 B, 2 B, 5 B, 10 B, ... 5 TB.
+# Files of 0 bytes fall below the first edge, and files at or above the last edge fall into the last bin.
+FILE_SIZE_BIN_MANTISSAS = (1, 2, 5)
+FILE_SIZE_BIN_MIN_EXPONENT = 0
+FILE_SIZE_BIN_MAX_EXPONENT = 12
+FILE_SIZE_PLOT_Y_MARGIN = 0.2  # Fraction of the count axis range kept free for the count labels
+FILE_SIZE_UNITS = (
+    ("B", 1.0),
+    ("kB", BYTES_PER_KB),
+    ("MB", BYTES_PER_MB),
+    ("GB", BYTES_PER_GB),
+    ("TB", BYTES_PER_TB),
+    ("PB", BYTES_PER_PB),
+)
 
 
 def datetime_to_gps_seconds(datetime_with_timezone: datetime) -> int:
@@ -103,12 +119,23 @@ class FileTypeStats:
     """Size statistics for one data type. All sizes are in bytes."""
 
     label: str
+    filetype: int
     file_count: int
     min_bytes: int
     mean_bytes: float
     median_bytes: int
     max_bytes: int
     total_bytes: int
+    display_order: int
+
+
+@dataclass(frozen=True)
+class FileSizeBin:
+    """Number of files in one file size range. All sizes are in bytes."""
+
+    lower_bytes: int
+    upper_bytes: int | None
+    file_count: int
 
 
 def build_correlator_eras() -> list[CorrelatorEra]:
@@ -130,7 +157,7 @@ def build_correlator_eras() -> list[CorrelatorEra]:
     ]
 
 
-def build_filetype_slice_where_clauses(obsid_column: str, filetype_column: str) -> list[tuple[str, str]]:
+def build_filetype_slice_where_clauses(obsid_column: str, filetype_column: str) -> list[tuple[str, str, int]]:
     """Build the WHERE expressions that split the files into the rows of the tables.
 
     Args:
@@ -138,24 +165,89 @@ def build_filetype_slice_where_clauses(obsid_column: str, filetype_column: str) 
         filetype_column: Name of the file type column, as it is used in the query.
 
     Returns:
-        A list of (era label, WHERE expression). The first entry is every file type except raw
+        A list of (era label, WHERE expression, display order modifier). The first entry is every file type except raw
         correlator, with an empty era label. The others are one per raw correlator era.
     """
-    slices = [("", f"{filetype_column} <> {CORRELATOR_FILETYPE}")]
-    for era in build_correlator_eras():
+    # The first slice is all non-correlator files, which are not split by era.
+    # The display order modifier is 100 so that they appear after the correlator eras (which are 1, 2, 3, ...).
+    slices = [("", f"{filetype_column} <> {CORRELATOR_FILETYPE}", 100)]
+
+    for i, era in enumerate(build_correlator_eras(), start=1):
         conditions = [f"{filetype_column} = {CORRELATOR_FILETYPE}"]
         if era.gps_start is not None:
             conditions.append(f"{obsid_column} >= {era.gps_start}")
         if era.gps_end is not None:
             conditions.append(f"{obsid_column} < {era.gps_end}")
-        slices.append((era.label, " AND ".join(conditions)))
+        slices.append((era.label, " AND ".join(conditions), i))
     return slices
+
+
+def get_filetype_order() -> list[int]:
+    """Get the file types in the order they should be displayed in tables and plots.
+
+    Returns:
+        The file types, oldest first.
+    """
+    return [CORRELATOR_FILETYPE, 18, 11, 16, 15, 17, 20, 19, 14, 10]
 
 
 def format_file_type_label(filetype: int, description: str | None, era_label: str) -> str:
     """Build the Data Type label for a table row."""
     label = f"{filetype} - {description if description else 'unknown'}"
     return f"{label} [{era_label}]" if era_label else label
+
+
+def build_file_size_bin_edges() -> list[int]:
+    """Build the lower edges of the file size histogram bins.
+
+    Returns:
+        The edges in bytes, in ascending order (1-2-5 steps per decade).
+    """
+    return [
+        mantissa * 10**exponent
+        for exponent in range(FILE_SIZE_BIN_MIN_EXPONENT, FILE_SIZE_BIN_MAX_EXPONENT + 1)
+        for mantissa in FILE_SIZE_BIN_MANTISSAS
+    ]
+
+
+def build_file_size_bins(edges: list[int], bucket_counts: dict[int, int]) -> list[FileSizeBin]:
+    """Build the file size histogram bins, including the bins that have no files.
+
+    Bucket numbers follow the PostgreSQL width_bucket() function: bucket 0 holds the files below the first edge,
+    bucket N (N >= 1) holds the files from edges[N - 1] up to, but not including, edges[N]. The last bucket has no
+    upper limit.
+
+    Args:
+        edges: The lower edges in bytes, in ascending order.
+        bucket_counts: The number of files for each bucket number. Missing buckets have no files.
+
+    Returns:
+        One FileSizeBin per bucket, smallest files first.
+    """
+    bins = []
+    for bucket in range(len(edges) + 1):
+        lower_bytes = edges[bucket - 1] if bucket > 0 else 0
+        upper_bytes = edges[bucket] if bucket < len(edges) else None
+        bins.append(FileSizeBin(lower_bytes, upper_bytes, bucket_counts.get(bucket, 0)))
+    return bins
+
+
+def format_file_size(size_bytes: float) -> str:
+    """Format a size in bytes using the largest decimal unit that fits, e.g. 2000000 -> '2 MB'."""
+    unit_name, unit_bytes = FILE_SIZE_UNITS[0]
+    for name, unit_size in FILE_SIZE_UNITS:
+        if size_bytes >= unit_size:
+            unit_name, unit_bytes = name, unit_size
+    return f"{size_bytes / unit_bytes:g} {unit_name}"
+
+
+def format_file_size_bin_label(size_bin: FileSizeBin) -> str:
+    """Build the axis label of a file size histogram bin."""
+    if size_bin.upper_bytes is None:
+        return f">= {format_file_size(size_bin.lower_bytes)}"
+    if size_bin.lower_bytes == 0:
+        return "0 B (empty)"
+    return f"{format_file_size(size_bin.lower_bytes)} - {format_file_size(size_bin.upper_bytes)}"
 
 
 def filter_monthly_by_range(monthly_data, date_from, date_to):

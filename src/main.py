@@ -8,7 +8,12 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 from core import AWST, build_deleted_lookup, bytes_to_terabytes
-from data_db import fetch_deleted_data_by_month_from_db, fetch_file_type_stats_from_db, get_connection_pool
+from data_db import (
+    fetch_deleted_data_by_month_from_db,
+    fetch_file_size_histogram_from_db,
+    fetch_file_type_stats_from_db,
+    get_connection_pool,
+)
 from data_tap import (
     fetch_archive_bytes_by_mode_from_tap,
     fetch_daily_stats_from_tap,
@@ -24,6 +29,7 @@ from plots import (
     plot_archive_volume_per_project,
     plot_download_count_per_month,
     plot_downloaded_data_per_month,
+    plot_file_size_distribution,
     plot_telescope_time_per_project,
 )
 from stats import (
@@ -180,6 +186,7 @@ def run(config_filename, no_pawsey: bool = False):
     tap_project_data_6mo = fetch_project_data_from_tap(mwa_tap_service, six_months_ago, today)
     tap_mode_data = fetch_archive_bytes_by_mode_from_tap(mwa_tap_service)
     db_deleted_data = fetch_deleted_data_by_month_from_db(mwa_db)
+    db_file_size_histogram = fetch_file_size_histogram_from_db(mwa_db)
 
     # Close MWA database
     mwa_db.close()
@@ -329,6 +336,13 @@ def run(config_filename, no_pawsey: bool = False):
         tap_mode_data,
         "MWA Archive Volume by Data Type",
         "mwa_archive_volume_by_data_type.png",
+    )
+
+    # File size distribution
+    plot_file_size_distribution(
+        db_file_size_histogram,
+        "MWA Archive File Size Distribution",
+        "mwa_archive_file_size_distribution.png",
     )
 
     # Archive volume — last 6 months

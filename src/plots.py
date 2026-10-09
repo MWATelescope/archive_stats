@@ -4,7 +4,15 @@ import time
 import matplotlib.pyplot as plt
 import numpy as np
 
-from core import DPI, bytes_to_petabytes, bytes_to_terabytes, filter_monthly_by_range
+from core import (
+    DPI,
+    FILE_SIZE_PLOT_Y_MARGIN,
+    FileSizeBin,
+    bytes_to_petabytes,
+    bytes_to_terabytes,
+    filter_monthly_by_range,
+    format_file_size_bin_label,
+)
 
 logger = logging.getLogger("archive_stats")
 
@@ -56,7 +64,7 @@ def plot_archive_volume_per_month(
     stride_count = 0
 
     for row in rows:
-        net_bytes = row["all_ingested_data_bytes"]
+        net_bytes = row["all_ingested_bytes"]
         cumulative_volume_bytes += net_bytes
 
         if not ingest_only:
@@ -361,5 +369,46 @@ def plot_archive_volume_per_data_type(mode_data, title, filename):
 
     plt.title(f"{title} (as at {time.strftime('%d-%b-%Y')})")
     fig.set_size_inches(18.5, 10.5)
+    plt.savefig(filename, dpi=DPI)
+    logger.info(f"Saved {filename} to disk.")
+
+
+def plot_file_size_distribution(size_bins: list[FileSizeBin], title: str, filename: str) -> None:
+    """Plot the number of archived files per file size range as a histogram.
+
+    Size ranges without files at the small and large ends are left out. The count axis is logarithmic, because the
+    counts of the size ranges differ by orders of magnitude.
+
+    Args:
+        size_bins: The size ranges with their file counts, smallest files first.
+        title: The plot title.
+        filename: The image file to write.
+    """
+    clear_plots()
+
+    populated = [index for index, size_bin in enumerate(size_bins) if size_bin.file_count > 0]
+    if not populated:
+        logger.warning("No file sizes to plot.")
+        return
+    size_bins = size_bins[populated[0] : populated[-1] + 1]
+
+    counts = [size_bin.file_count for size_bin in size_bins]
+    positions = np.arange(len(size_bins))
+
+    fig, axis = plt.subplots()
+    bars = axis.bar(positions, counts)
+    # Empty size ranges inside the plotted range get no label, as zero cannot be drawn on a logarithmic axis.
+    axis.bar_label(bars, labels=[f"{count:,}" if count > 0 else "" for count in counts], rotation=90, padding=3)
+    # axis.set_yscale("log")
+    axis.margins(y=FILE_SIZE_PLOT_Y_MARGIN)
+    axis.set_xticks(
+        positions, labels=[format_file_size_bin_label(size_bin) for size_bin in size_bins], rotation=45, ha="right"
+    )
+    axis.set_xlabel("File size")
+    axis.set_ylabel("Number of files (log scale)")
+
+    plt.title(f"{title} (as at {time.strftime('%d-%b-%Y')})")
+    fig.set_size_inches(18.5, 10.5)
+    plt.tight_layout()
     plt.savefig(filename, dpi=DPI)
     logger.info(f"Saved {filename} to disk.")
