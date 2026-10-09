@@ -12,7 +12,6 @@ from data_db import fetch_deleted_data_by_month_from_db, fetch_file_type_stats_f
 from data_tap import (
     fetch_archive_bytes_by_mode_from_tap,
     fetch_daily_stats_from_tap,
-    fetch_file_type_stats_from_tap,
     fetch_location_summary_bytes_from_tap,
     fetch_monthly_data_from_tap,
     fetch_project_data_from_tap,
@@ -85,6 +84,9 @@ def run(config_filename, no_pawsey: bool = False):
         db_acacia_mwa_bytes,
         db_banksia_bytes,
     ) = fetch_location_summary_bytes_from_tap(mwa_tap_service)
+
+    logger.info(f"Acacia_mwa Quota Used: {bytes_to_terabytes(db_acacia_mwa_bytes):.3f} TB")
+    logger.info(f"Banksia Quota Used: {bytes_to_terabytes(db_banksia_bytes):.3f} TB")
 
     lts_percent_used = ((db_acacia_mwa_bytes + db_banksia_bytes) / (acacia_mwa_quota_bytes + banksia_quota_bytes)) * 100
     logger.info(
@@ -165,39 +167,42 @@ def run(config_filename, no_pawsey: bool = False):
         logger.info(f"Acacia_mwa Quota Available: {bytes_to_terabytes(acacia_mwa_available_bytes):.3f} TB ")
         logger.info(f"Banksia Quota Available: {bytes_to_terabytes(banksia_available_bytes):.3f} TB ")
         logger.info(f"Pawsey Quota Available: {bytes_to_terabytes(pawsey_available_bytes):.3f} TB ")
-    logger.info("-------------------------------------------------------\n")
+
+    logger.info("-------------------------------------------------------")
 
     # ---------------------------------------------------------------
     # Fetch data once
     # ---------------------------------------------------------------
-    filetype_db_data = fetch_file_type_stats_from_db(mwa_db)
-    filetype_tap_data = fetch_file_type_stats_from_tap(mwa_tap_service)
-    monthly_data = fetch_monthly_data_from_tap(mwa_tap_service)
-    daily_data = fetch_daily_stats_from_tap(mwa_tap_service)
-    project_data_all = fetch_project_data_from_tap(mwa_tap_service)
-    project_data_6mo = fetch_project_data_from_tap(mwa_tap_service, six_months_ago, today)
-    deleted_data = fetch_deleted_data_by_month_from_db(mwa_db)
+    db_filetype_data = fetch_file_type_stats_from_db(mwa_db)
+    tap_monthly_data = fetch_monthly_data_from_tap(mwa_tap_service)
+    tap_daily_data = fetch_daily_stats_from_tap(mwa_tap_service)
+    tap_project_data_all = fetch_project_data_from_tap(mwa_tap_service)
+    tap_project_data_6mo = fetch_project_data_from_tap(mwa_tap_service, six_months_ago, today)
+    tap_mode_data = fetch_archive_bytes_by_mode_from_tap(mwa_tap_service)
+    db_deleted_data = fetch_deleted_data_by_month_from_db(mwa_db)
+
+    # Close MWA database
     mwa_db.close()
-    deleted_lookup = build_deleted_lookup(deleted_data)
-    mode_data = fetch_archive_bytes_by_mode_from_tap(mwa_tap_service)
+
+    # Filter data
+    db_deleted_lookup = build_deleted_lookup(db_deleted_data)
 
     logger.info(
-        f"Fetched {len(monthly_data)} monthly rows, "
-        f"{len(project_data_all)} projects (all time), "
-        f"{len(project_data_6mo)} projects (6 mo), "
-        f"{len(deleted_data)} deleted-data months, "
-        f"{len(mode_data)} modes."
+        f"Fetched {len(tap_monthly_data)} monthly rows, "
+        f"{len(tap_project_data_all)} projects (all time), "
+        f"{len(tap_project_data_6mo)} projects (6 mo), "
+        f"{len(db_deleted_data)} deleted-data months, "
+        f"{len(tap_mode_data)} modes."
     )
 
     # ---------------------------------------------------------------
     # CSV dumps (use pre-fetched data)
     # ---------------------------------------------------------------
-    print_file_type_table("File type summary from TAP (mwa.obs_data_file)", filetype_tap_data)
-    print_file_type_table("File type summary from the MWA database (data_files)", filetype_db_data)
-    print_yearly_summary(monthly_data, deleted_lookup)
-    write_daily_stats(daily_data, "stats.csv")
-    write_monthly_stats(monthly_data, "stats_by_month.csv")
-    write_stats_by_project(project_data_all, "stats_by_project.csv")
+    print_file_type_table("File type summary from the MWA database (data_files)", db_filetype_data)
+    print_yearly_summary("Yearly Summary from ()", tap_monthly_data, db_deleted_lookup)
+    write_daily_stats(tap_daily_data, "stats.csv")
+    write_monthly_stats(tap_monthly_data, "stats_by_month.csv")
+    write_stats_by_project(tap_project_data_all, "stats_by_project.csv")
 
     # ---------------------------------------------------------------
     # Plots (use pre-fetched data, filter in Python)
@@ -205,7 +210,7 @@ def run(config_filename, no_pawsey: bool = False):
 
     # Downloaded data
     plot_downloaded_data_per_month(
-        monthly_data,
+        tap_monthly_data,
         start_date,
         today,
         "Downloaded Data per month (all time)",
@@ -214,7 +219,7 @@ def run(config_filename, no_pawsey: bool = False):
     )
 
     plot_downloaded_data_per_month(
-        monthly_data,
+        tap_monthly_data,
         start_date,
         today,
         "Cumulative downloaded data per month (all time)",
@@ -224,7 +229,7 @@ def run(config_filename, no_pawsey: bool = False):
 
     # Download counts
     plot_download_count_per_month(
-        monthly_data,
+        tap_monthly_data,
         start_date,
         today,
         "Number of Downloads per month (all time)",
@@ -233,7 +238,7 @@ def run(config_filename, no_pawsey: bool = False):
     )
 
     plot_download_count_per_month(
-        monthly_data,
+        tap_monthly_data,
         start_date,
         today,
         "Cumulative Number of Downloads per month (all time)",
@@ -243,8 +248,8 @@ def run(config_filename, no_pawsey: bool = False):
 
     # Archive volume — all time
     plot_archive_volume_per_month(
-        monthly_data,
-        deleted_lookup,
+        tap_monthly_data,
+        db_deleted_lookup,
         start_date,
         today,
         "MWA Archive Volume (all time)",
@@ -253,8 +258,8 @@ def run(config_filename, no_pawsey: bool = False):
         False,
     )
     plot_archive_volume_per_month(
-        monthly_data,
-        deleted_lookup,
+        tap_monthly_data,
+        db_deleted_lookup,
         start_date,
         today,
         "MWA Archive Ingest (all time)",
@@ -264,8 +269,8 @@ def run(config_filename, no_pawsey: bool = False):
     )
 
     plot_archive_volume_per_month(
-        monthly_data,
-        deleted_lookup,
+        tap_monthly_data,
+        db_deleted_lookup,
         special_date_from,
         special_date_to,
         f"MWA Archive Ingest ({special_date_from} - {special_date_to})",
@@ -275,8 +280,8 @@ def run(config_filename, no_pawsey: bool = False):
     )
 
     plot_archive_volume_per_month(
-        monthly_data,
-        deleted_lookup,
+        tap_monthly_data,
+        db_deleted_lookup,
         special_date_from,
         special_date_to,
         f"MWA Archive Ingest ({special_date_from} - {special_date_to})",
@@ -286,8 +291,8 @@ def run(config_filename, no_pawsey: bool = False):
     )
 
     plot_archive_volume_per_month(
-        monthly_data,
-        deleted_lookup,
+        tap_monthly_data,
+        db_deleted_lookup,
         special_date_from,
         special_date_to,
         f"MWA Archive Volume ({special_date_from} - {special_date_to})",
@@ -297,8 +302,8 @@ def run(config_filename, no_pawsey: bool = False):
     )
 
     plot_archive_volume_per_month(
-        monthly_data,
-        deleted_lookup,
+        tap_monthly_data,
+        db_deleted_lookup,
         special_date_from,
         special_date_to,
         f"MWA Archive Volume ({special_date_from} - {special_date_to})",
@@ -309,27 +314,27 @@ def run(config_filename, no_pawsey: bool = False):
 
     # Per-project — all time
     plot_archive_volume_per_project(
-        project_data_all,
+        tap_project_data_all,
         "MWA Archive Volume by Project (all time)",
         "mwa_archive_volume_by_project_all_time.png",
     )
     plot_telescope_time_per_project(
-        project_data_all,
+        tap_project_data_all,
         "MWA Telescope Time (all time)",
         "mwa_telescope_time_all_time.png",
     )
 
     # Archive volume by data type
     plot_archive_volume_per_data_type(
-        mode_data,
+        tap_mode_data,
         "MWA Archive Volume by Data Type",
         "mwa_archive_volume_by_data_type.png",
     )
 
     # Archive volume — last 6 months
     plot_archive_volume_per_month(
-        monthly_data,
-        deleted_lookup,
+        tap_monthly_data,
+        db_deleted_lookup,
         six_months_ago,
         today,
         "MWA Archive Net Growth (last 6 months)",
@@ -338,8 +343,8 @@ def run(config_filename, no_pawsey: bool = False):
         False,
     )
     plot_archive_volume_per_month(
-        monthly_data,
-        deleted_lookup,
+        tap_monthly_data,
+        db_deleted_lookup,
         six_months_ago,
         today,
         "MWA Archive Ingest (last 6 months)",
@@ -350,12 +355,12 @@ def run(config_filename, no_pawsey: bool = False):
 
     # Per-project — last 6 months
     plot_archive_volume_per_project(
-        project_data_6mo,
+        tap_project_data_6mo,
         "MWA Archive Volume by Project (last 6 months)",
         "mwa_archive_volume_by_project_last_6_months.png",
     )
     plot_telescope_time_per_project(
-        project_data_6mo,
+        tap_project_data_6mo,
         "MWA Telescope Time (last 6 months)",
         "mwa_telescope_time_last_6_months.png",
     )

@@ -12,6 +12,7 @@ from core import (
     FILE_TYPE_TABLE_TOTAL_DECIMALS,
     YEARLY_TABLE_ROW_FORMAT,
     FileTypeStats,
+    bytes_to_megabytes,
     bytes_to_petabytes,
     bytes_to_terabytes,
     get_available_hours,
@@ -33,10 +34,13 @@ def build_yearly_summary(monthly_data, deleted_lookup):
         total_bytes is the cumulative net volume at the end of that year.
     """
     ingest_by_year: dict[int, int] = defaultdict(int)
+    archived_by_year: dict[int, int] = defaultdict(int)
     deleted_by_year: dict[int, int] = defaultdict(int)
 
     for row in monthly_data:
-        ingest_by_year[row["reporting_year"]] += row["all_ingested_data_bytes"]
+        ingest_by_year[row["reporting_year"]] += row["all_ingested_bytes"]
+        archived_by_year[row["reporting_year"]] += row["total_archived_bytes"]
+
     for (year, _month), deleted_bytes in deleted_lookup.items():
         deleted_by_year[year] += deleted_bytes
 
@@ -72,10 +76,10 @@ def print_file_type_table(title: str, stats: list[FileTypeStats]) -> None:
     header = FILE_TYPE_TABLE_ROW_FORMAT.format(
         label="Data Type",
         count="Count",
-        min_tb="Min (TB)",
-        mean_tb="Mean (TB)",
-        median_tb="Median (TB)",
-        max_tb="Max (TB)",
+        min_mb="Min (MB)",
+        mean_mb="Mean (MB)",
+        median_mb="Median (MB)",
+        max_mb="Max (MB)",
         total_tb="Total (TB)",
     )
     separator = "-" * len(header.expandtabs())
@@ -88,10 +92,10 @@ def print_file_type_table(title: str, stats: list[FileTypeStats]) -> None:
             FILE_TYPE_TABLE_ROW_FORMAT.format(
                 label=row.label,
                 count=f"{row.file_count:,}",
-                min_tb=f"{bytes_to_terabytes(row.min_bytes):{size_format}}",
-                mean_tb=f"{bytes_to_terabytes(row.mean_bytes):{size_format}}",
-                median_tb=f"{bytes_to_terabytes(row.median_bytes):{size_format}}",
-                max_tb=f"{bytes_to_terabytes(row.max_bytes):{size_format}}",
+                min_mb=f"{bytes_to_megabytes(row.min_bytes):{size_format}}",
+                mean_mb=f"{bytes_to_megabytes(row.mean_bytes):{size_format}}",
+                median_mb=f"{bytes_to_megabytes(row.median_bytes):{size_format}}",
+                max_mb=f"{bytes_to_megabytes(row.max_bytes):{size_format}}",
                 total_tb=f"{bytes_to_terabytes(row.total_bytes):{total_format}}",
             )
         )
@@ -100,21 +104,22 @@ def print_file_type_table(title: str, stats: list[FileTypeStats]) -> None:
         FILE_TYPE_TABLE_ROW_FORMAT.format(
             label="All",
             count=f"{sum(row.file_count for row in stats):,}",
-            min_tb="",
-            mean_tb="",
-            median_tb="",
-            max_tb="",
+            min_mb="",
+            mean_mb="",
+            median_mb="",
+            max_mb="",
             total_tb=f"{bytes_to_terabytes(sum(row.total_bytes for row in stats)):{total_format}}",
         )
     )
 
 
-def print_yearly_summary(monthly_data, deleted_lookup):
+def print_yearly_summary(title: str, monthly_data, deleted_lookup):
     """Print a per-year table of ingest, deleted, net and total volume to the console.
 
     The current year is marked with '*' because its total is as at today, not 31-Dec.
 
     Args:
+        title: Title for the table
         monthly_data: Rows from fetch_monthly_data().
         deleted_lookup: {(year, month): deleted_bytes} from build_deleted_lookup().
     """
@@ -124,6 +129,7 @@ def print_yearly_summary(monthly_data, deleted_lookup):
     )
     separator = "-" * len(header)
 
+    print(f"\n{title}")
     print(header)
     print(separator)
     for row in build_yearly_summary(monthly_data, deleted_lookup):

@@ -10,17 +10,18 @@ LEGACY_INT32_START = datetime(2014, 10, 15, tzinfo=AWST)
 LEGACY_INT32_COMPRESSED_START = datetime(2017, 11, 1, tzinfo=AWST)
 CORRELATOR_FILETYPE = 8
 
-
-BYTES_PER_TB = 1000.0**4
+BYTES_PER_MB = 1000.0**2
+BYTES_PER_GB = BYTES_PER_MB * 1000.0
+BYTES_PER_TB = BYTES_PER_GB * 1000.0
 BYTES_PER_PB = BYTES_PER_TB * 1000.0
 YEARLY_TABLE_ROW_FORMAT = "{year:<6}\t{ingest:>14}\t{deleted:>14}\t{net:>14}\t{total:>18}"
 
 DPI = 100
 
 FILE_TYPE_TABLE_ROW_FORMAT = (
-    "{label:<70}\t{count:>14}\t{min_tb:>14}\t{mean_tb:>14}\t{median_tb:>14}\t{max_tb:>14}\t{total_tb:>16}"
+    "{label:<70}\t{count:>14}\t{min_mb:>14}\t{mean_mb:>14}\t{median_mb:>14}\t{max_mb:>14}\t{total_tb:>16}"
 )
-FILE_TYPE_TABLE_SIZE_DECIMALS = 6
+FILE_TYPE_TABLE_SIZE_DECIMALS = 3
 FILE_TYPE_TABLE_TOTAL_DECIMALS = 3
 MEDIAN_QUANTILE = 0.5
 
@@ -58,6 +59,20 @@ def get_available_hours(year: int, month: int):
 
     # return hours
     return (end_date - start_date).total_seconds() / 3600
+
+
+def bytes_to_megabytes(bytes_value):
+    """Convert bytes to MB"""
+    if bytes_value is None:
+        return 0.0
+    return float(bytes_value) / BYTES_PER_MB
+
+
+def bytes_to_gigabytes(bytes_value):
+    """Convert bytes to GB"""
+    if bytes_value is None:
+        return 0.0
+    return float(bytes_value) / BYTES_PER_GB
 
 
 def bytes_to_terabytes(bytes_value):
@@ -126,7 +141,7 @@ def build_filetype_slice_where_clauses(obsid_column: str, filetype_column: str) 
         A list of (era label, WHERE expression). The first entry is every file type except raw
         correlator, with an empty era label. The others are one per raw correlator era.
     """
-    slices = [("All file types", f"{filetype_column} <> {CORRELATOR_FILETYPE}")]
+    slices = [("", f"{filetype_column} <> {CORRELATOR_FILETYPE}")]
     for era in build_correlator_eras():
         conditions = [f"{filetype_column} = {CORRELATOR_FILETYPE}"]
         if era.gps_start is not None:

@@ -62,7 +62,7 @@ def fetch_deleted_data_by_month_from_db(mwa_db: ConnectionPool):
                     ,date_part('month', date_trunc('day', deleted_timestamp)) as reporting_month
                     ,COALESCE(SUM(size), 0) as deleted_bytes
                 FROM data_files
-                WHERE deleted_timestamp IS NOT NULL AND deleted_timestamp >= '2013-07-01'
+                WHERE deleted_timestamp IS NOT NULL
                 GROUP BY 1, 2
                 ORDER BY 1, 2
                 """
@@ -117,7 +117,7 @@ def fetch_file_type_stats_from_db(mwa_db: ConnectionPool) -> list[FileTypeStats]
                         ,MAX(f.size)
                         ,SUM(f.size)
                     FROM data_files f
-                    LEFT JOIN data_file_types t ON t.type = f.filetype
+                    INNER JOIN data_file_types t ON t.type = f.filetype
                     WHERE {where_sql:q} AND remote_archived=True AND deleted_timestamp IS NULL
                     GROUP BY f.filetype, t.description
                     ORDER BY f.filetype

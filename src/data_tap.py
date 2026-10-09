@@ -2,8 +2,6 @@ import logging
 
 import pyvo as vo
 
-from core import FileTypeStats, build_filetype_slice_where_clauses, format_file_type_label
-
 logger = logging.getLogger("archive_stats")
 
 
@@ -27,7 +25,7 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
     Returns a list of dicts with keys:
         reporting_year, reporting_month, total_secs,
         total_archived_bytes, files_deleted_bytes,
-        all_ingested_data_bytes, downloaded_bytes,
+        all_ingested_bytes, downloaded_bytes,
         download_count
     """
     logger.info("Fetching monthly data from TAP...")
@@ -39,7 +37,7 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
                 ,COALESCE(o.total_secs, 0) as total_secs
                 ,COALESCE(o.total_archived_bytes, 0) as total_archived_bytes
                 ,COALESCE(o.files_deleted_bytes, 0) as files_deleted_bytes
-                ,COALESCE(o.all_ingested_data_bytes, 0) as all_ingested_data_bytes
+                ,COALESCE(o.all_ingested_bytes, 0) as all_ingested_bytes
                 ,COALESCE(d.downloaded_bytes, 0) as downloaded_bytes
                 ,COALESCE(d.download_count, 0) as download_count
             FROM (
@@ -49,7 +47,7 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
                     ,COALESCE(SUM(duration), 0) as total_secs
                     ,COALESCE(SUM(total_archived_bytes), 0) as total_archived_bytes
                     ,COALESCE(SUM(files_deleted_bytes), 0) as files_deleted_bytes
-                    ,COALESCE(SUM(total_archived_bytes + files_deleted_bytes), 0) as all_ingested_data_bytes
+                    ,COALESCE(SUM(total_archived_bytes + files_deleted_bytes), 0) as all_ingested_bytes
                 FROM mwa.observation
                 GROUP BY 1, 2
             ) o
@@ -71,7 +69,7 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
             "total_secs": int(row["total_secs"]),
             "total_archived_bytes": int(row["total_archived_bytes"]),
             "files_deleted_bytes": int(row["files_deleted_bytes"]),
-            "all_ingested_data_bytes": int(row["all_ingested_data_bytes"]),
+            "all_ingested_bytes": int(row["all_ingested_bytes"]),
             "downloaded_bytes": int(row["downloaded_bytes"]),
             "download_count": int(row["download_count"]),
         }
@@ -176,48 +174,48 @@ def fetch_location_summary_bytes_from_tap(tap_service: vo.dal.TAPService):
     return acacia_mwa, banksia
 
 
-def fetch_file_type_stats_from_tap(tap_service: vo.dal.TAPService) -> list[FileTypeStats]:
-    """Fetch size statistics per data type from the TAP service.
+# def fetch_file_type_stats_from_tap(tap_service: vo.dal.TAPService) -> list[FileTypeStats]:
+#     """Fetch size statistics per data type from the TAP service.
 
-    Args:
-        tap_service: A pyvo TAPService.
+#     Args:
+#         tap_service: A pyvo TAPService.
 
-    Returns:
-        One FileTypeStats per data type. Raw correlator files are split by era.
-    """
-    logger.info("Fetching file type statistics from TAP...")
-    stats = []
-    for era_label, where_clause in build_filetype_slice_where_clauses("obs_id", "filetype"):
-        logger.info(f"...Fetching statistics for era: {era_label}")
-        results = do_adql_query(
-            tap_service,
-            f"""SELECT
-                    filetype
-                    ,filetypedescription
-                    ,COUNT(*) AS file_count
-                    ,MIN(archived_size) AS min_size
-                    ,AVG(archived_size) AS mean_size
-                    ,MAX(archived_size) AS max_size
-                    ,SUM(archived_size) AS total_size
-                FROM mwa.obs_data_file
-                WHERE {where_clause}
-                GROUP BY filetype, filetypedescription
-                ORDER BY filetype""",
-        )
-        for row in results:
-            filetype = int(row["filetype"])
-            label = format_file_type_label(filetype, row["filetypedescription"], era_label)
-            logger.info(f"Finding median size for {label}...")
-            median_bytes = -1
-            stats.append(
-                FileTypeStats(
-                    label=label,
-                    file_count=int(row["file_count"]),
-                    min_bytes=int(row["min_size"]),
-                    mean_bytes=float(row["mean_size"]),
-                    median_bytes=median_bytes,
-                    max_bytes=int(row["max_size"]),
-                    total_bytes=int(row["total_size"]),
-                )
-            )
-    return stats
+#     Returns:
+#         One FileTypeStats per data type. Raw correlator files are split by era.
+#     """
+#     logger.info("Fetching file type statistics from TAP...")
+#     stats = []
+#     for era_label, where_clause in build_filetype_slice_where_clauses("obs_id", "filetype"):
+#         logger.info(f"...Fetching statistics for era: {era_label}")
+#         results = do_adql_query(
+#             tap_service,
+#             f"""SELECT
+#                     filetype
+#                     ,filetypedescription
+#                     ,SUM(archived_files) AS file_count
+#                     ,MIN(archived_size) AS min_size
+#                     ,AVG(archived_size) AS mean_size
+#                     ,MAX(archived_size) AS max_size
+#                     ,SUM(archived_size) AS total_size
+#                 FROM mwa.obs_data_file
+#                 WHERE {where_clause}
+#                 GROUP BY filetype, filetypedescription
+#                 ORDER BY filetype""",
+#         )
+#         for row in results:
+#             filetype = int(row["filetype"])
+#             label = format_file_type_label(filetype, row["filetypedescription"], era_label)
+#             logger.info(f"Finding median size for {label}...")
+#             median_bytes = -1
+#             stats.append(
+#                 FileTypeStats(
+#                     label=label,
+#                     file_count=int(row["file_count"]),
+#                     min_bytes=int(row["min_size"]),
+#                     mean_bytes=float(row["mean_size"]),
+#                     median_bytes=median_bytes,
+#                     max_bytes=int(row["max_size"]),
+#                     total_bytes=int(row["total_size"]),
+#                 )
+#             )
+#     return stats
