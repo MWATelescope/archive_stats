@@ -75,7 +75,7 @@ def fetch_deleted_data_by_month_from_db(mwa_db: psycopg2.pool.ThreadedConnection
 def fetch_file_type_stats_from_db(mwa_db: psycopg2.pool.ThreadedConnectionPool) -> list[FileTypeStats]:
     """Fetch size statistics per data type from the MWA database.
 
-    Every row of data_files is counted, including deleted files.
+    Excludes deleted files.
 
     Args:
         mwa_db: A psycopg2 connection pool for the MWA database.
@@ -85,7 +85,6 @@ def fetch_file_type_stats_from_db(mwa_db: psycopg2.pool.ThreadedConnectionPool) 
         An empty list if the query failed.
     """
     logger.info("Fetching file type statistics from database...")
-    conn = None
     stats = []
 
     try:
