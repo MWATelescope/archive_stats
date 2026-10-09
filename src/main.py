@@ -8,7 +8,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
 from core import AWST, build_deleted_lookup, bytes_to_terabytes
-from data_db import fetch_deleted_data_by_month_from_db, fetch_file_type_stats_from_db, get_threaded_connection_pool
+from data_db import fetch_deleted_data_by_month_from_db, fetch_file_type_stats_from_db, get_connection_pool
 from data_tap import (
     fetch_archive_bytes_by_mode_from_tap,
     fetch_daily_stats_from_tap,
@@ -55,7 +55,7 @@ def run(config_filename, no_pawsey: bool = False):
         print(f"Path to minio not valid: {minio_path}")
         sys.exit(1)
 
-    mwa_db = get_threaded_connection_pool(
+    mwa_db = get_connection_pool(
         host=config.get("MWA Database", "dbhost"),
         user=config.get("MWA Database", "dbuser"),
         database=config.get("MWA Database", "dbname"),
@@ -177,6 +177,7 @@ def run(config_filename, no_pawsey: bool = False):
     project_data_all = fetch_project_data_from_tap(mwa_tap_service)
     project_data_6mo = fetch_project_data_from_tap(mwa_tap_service, six_months_ago, today)
     deleted_data = fetch_deleted_data_by_month_from_db(mwa_db)
+    mwa_db.close()
     deleted_lookup = build_deleted_lookup(deleted_data)
     mode_data = fetch_archive_bytes_by_mode_from_tap(mwa_tap_service)
 

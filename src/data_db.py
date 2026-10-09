@@ -1,63 +1,75 @@
 import logging
+from typing import LiteralString, cast
 
-import psycopg2
-import psycopg2.errors
-import psycopg2.pool
+import psycopg
+from psycopg import sql
+from psycopg_pool import ConnectionPool
 
 from core import MEDIAN_QUANTILE, FileTypeStats, build_filetype_slice_where_clauses, format_file_type_label
 
 logger = logging.getLogger("archive_stats")
 
+DB_POOL_MIN_SIZE = 1
+DB_POOL_MAX_SIZE = 2
 
-def get_threaded_connection_pool(host, user, database, password, port) -> psycopg2.pool.ThreadedConnectionPool:
-    """Create a threaded connection pool for the MWA database.
+
+def get_connection_pool(host, user, database, password, port) -> ConnectionPool:
+    """Create a thread-safe connection pool for the MWA database.
 
     Args:
-        db_config: A dict with keys: host, port, dbname, user, password
+        host: Database host name.
+        user: Database user name.
+        database: Database name.
+        password: Database password.
+        port: Database port.
+
     Returns:
-        A psycopg2.pool.ThreadedConnectionPool instance.
+        An open psycopg_pool.ConnectionPool instance with its minimum number of connections ready.
+
+    Raises:
+        psycopg_pool.PoolTimeout: If the database cannot be reached.
     """
-    return psycopg2.pool.ThreadedConnectionPool(
-        minconn=1,
-        maxconn=2,
-        host=host,
-        user=user,
-        database=database,
-        password=password,
-        port=port,
+    pool = ConnectionPool(
+        min_size=DB_POOL_MIN_SIZE,
+        max_size=DB_POOL_MAX_SIZE,
+        kwargs={
+            "host": host,
+            "user": user,
+            "dbname": database,
+            "password": password,
+            "port": port,
+        },
+        open=False,
     )
+    pool.open(wait=True)
+    return pool
 
 
-def fetch_deleted_data_by_month_from_db(mwa_db: psycopg2.pool.ThreadedConnectionPool):
+def fetch_deleted_data_by_month_from_db(mwa_db: ConnectionPool):
     """Fetch all deleted-data monthly aggregates from the database (no date filter).
 
     Returns a list of dicts with keys: reporting_year, reporting_month, deleted_bytes
     """
     logger.info("Fetching deleted data by month from database...")
-    conn = None
     results = None
 
     try:
-        conn = mwa_db.getconn()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT
-                date_part('year', date_trunc('day', deleted_timestamp)) as reporting_year
-                ,date_part('month', date_trunc('day', deleted_timestamp)) as reporting_month
-                ,COALESCE(SUM(size), 0) as deleted_bytes
-            FROM data_files
-            WHERE deleted_timestamp IS NOT NULL AND deleted_timestamp >= '2013-07-01'
-            GROUP BY 1, 2
-            ORDER BY 1, 2
-            """
-        )
-        results = cursor.fetchall()
-    except (psycopg2.DatabaseError, psycopg2.OperationalError) as error:
+        with mwa_db.connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT
+                    date_part('year', date_trunc('day', deleted_timestamp)) as reporting_year
+                    ,date_part('month', date_trunc('day', deleted_timestamp)) as reporting_month
+                    ,COALESCE(SUM(size), 0) as deleted_bytes
+                FROM data_files
+                WHERE deleted_timestamp IS NOT NULL AND deleted_timestamp >= '2013-07-01'
+                GROUP BY 1, 2
+                ORDER BY 1, 2
+                """
+            )
+            results = cursor.fetchall()
+    except (psycopg.DatabaseError, psycopg.OperationalError) as error:
         logger.error(error)
-    finally:
-        if conn is not None:
-            mwa_db.putconn(conn)
 
     if results is None:
         return []
@@ -72,13 +84,13 @@ def fetch_deleted_data_by_month_from_db(mwa_db: psycopg2.pool.ThreadedConnection
     ]
 
 
-def fetch_file_type_stats_from_db(mwa_db: psycopg2.pool.ThreadedConnectionPool) -> list[FileTypeStats]:
+def fetch_file_type_stats_from_db(mwa_db: ConnectionPool) -> list[FileTypeStats]:
     """Fetch size statistics per data type from the MWA database.
 
     Excludes deleted files.
 
     Args:
-        mwa_db: A psycopg2 connection pool for the MWA database.
+        mwa_db: A psycopg connection pool for the MWA database.
 
     Returns:
         One FileTypeStats per data type. Raw correlator files are split by era.
@@ -88,24 +100,25 @@ def fetch_file_type_stats_from_db(mwa_db: psycopg2.pool.ThreadedConnectionPool) 
     stats = []
 
     try:
-        conn = mwa_db.getconn()
-        with conn.cursor() as cursor:
+        with mwa_db.connection() as conn, conn.cursor() as cursor:
             for era_label, where_clause in build_filetype_slice_where_clauses("f.observation_num", "f.filetype"):
                 logger.info(f"...Fetching statistics for era: {era_label}")
+                # where_clause is built from internal constants only (see core.build_filetype_slice_where_clauses).
+                where_sql = sql.SQL(cast(LiteralString, where_clause))
                 cursor.execute(
-                    f"""
+                    t"""
                     SELECT
                         f.filetype
                         ,t.description
                         ,COUNT(*)
                         ,MIN(f.size)
                         ,AVG(f.size)
-                        ,percentile_disc({MEDIAN_QUANTILE}) WITHIN GROUP (ORDER BY f.size)
+                        ,percentile_disc({MEDIAN_QUANTILE:l}) WITHIN GROUP (ORDER BY f.size)
                         ,MAX(f.size)
                         ,SUM(f.size)
                     FROM data_files f
                     LEFT JOIN data_file_types t ON t.type = f.filetype
-                    WHERE {where_clause} AND remote_archived=True AND deleted_timestamp IS NULL
+                    WHERE {where_sql:q} AND remote_archived=True AND deleted_timestamp IS NULL
                     GROUP BY f.filetype, t.description
                     ORDER BY f.filetype
                     """
@@ -122,11 +135,8 @@ def fetch_file_type_stats_from_db(mwa_db: psycopg2.pool.ThreadedConnectionPool) 
                             total_bytes=int(row[7]),
                         )
                     )
-    except (psycopg2.DatabaseError, psycopg2.OperationalError) as error:
+    except (psycopg.DatabaseError, psycopg.OperationalError) as error:
         logger.error(error)
         return []
-    finally:
-        if conn is not None:
-            mwa_db.putconn(conn)
 
     return stats

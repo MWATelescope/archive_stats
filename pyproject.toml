@@ -8,7 +8,7 @@ dependencies = [
     "matplotlib",
     "pyvo",
     "numpy",
-    "psycopg2-binary",
+    "psycopg[binary,pool]",
     "ruff",
     "ty"
 ]
