@@ -5,3 +5,6 @@
 env/
 .python-version
 .vscode/
+cfg/config_real.cfg
+print_fits_table.py
+src/__pycache__/
