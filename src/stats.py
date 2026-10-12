@@ -22,26 +22,24 @@ from core import (
 logger = logging.getLogger("archive_stats")
 
 
-def build_yearly_summary(monthly_data, deleted_lookup):
+def build_yearly_summary(monthly_data, daily_deleted_data):
     """Aggregate ingest and deleted bytes per calendar year.
 
     Args:
         monthly_data: Rows from fetch_monthly_data().
-        deleted_lookup: {(year, month): deleted_bytes} from build_deleted_lookup().
+        daily_deleted_data: {(year, month, day, projectid): deleted_bytes} from fetch_daily_deleted_data()
 
     Returns:
         A list of dicts with keys: year, ingest_bytes, deleted_bytes, net_bytes, total_bytes.
         total_bytes is the cumulative net volume at the end of that year.
     """
     ingest_by_year: dict[int, int] = defaultdict(int)
-    archived_by_year: dict[int, int] = defaultdict(int)
     deleted_by_year: dict[int, int] = defaultdict(int)
 
     for row in monthly_data:
-        ingest_by_year[row["reporting_year"]] += row["all_ingested_bytes"]
-        archived_by_year[row["reporting_year"]] += row["total_archived_bytes"]
+        ingest_by_year[row["reporting_year"]] += row["total_ingested_bytes"]
 
-    for (year, _month), deleted_bytes in deleted_lookup.items():
+    for (year, _month, _day, _projectid), deleted_bytes in daily_deleted_data.items():
         deleted_by_year[year] += deleted_bytes
 
     summary = []
@@ -52,7 +50,8 @@ def build_yearly_summary(monthly_data, deleted_lookup):
         summary.append(
             {
                 "year": year,
-                "ingest_bytes": ingest_by_year[year],
+                "ingested_bytes": ingest_by_year[year],
+                "archived_bytes": ingest_by_year[year] - deleted_by_year[year],
                 "deleted_bytes": deleted_by_year[year],
                 "net_bytes": net_bytes,
                 "total_bytes": total_bytes,
@@ -113,7 +112,7 @@ def print_file_type_table(title: str, stats: list[FileTypeStats]) -> None:
     )
 
 
-def print_yearly_summary(title: str, monthly_data, deleted_lookup):
+def print_yearly_summary(title: str, monthly_data, daily_deleted_data):
     """Print a per-year table of ingest, deleted, net and total volume to the console.
 
     The current year is marked with '*' because its total is as at today, not 31-Dec.
@@ -121,7 +120,7 @@ def print_yearly_summary(title: str, monthly_data, deleted_lookup):
     Args:
         title: Title for the table
         monthly_data: Rows from fetch_monthly_data().
-        deleted_lookup: {(year, month): deleted_bytes} from build_deleted_lookup().
+        daily_deleted_data: {(year, month, day, projectid): deleted_bytes} from fetch_daily_deleted_data().
     """
     current_year = datetime.now(tz=AWST).year
     header = YEARLY_TABLE_ROW_FORMAT.format(
@@ -132,12 +131,12 @@ def print_yearly_summary(title: str, monthly_data, deleted_lookup):
     print(f"\n{title}")
     print(header)
     print(separator)
-    for row in build_yearly_summary(monthly_data, deleted_lookup):
+    for row in build_yearly_summary(monthly_data, daily_deleted_data):
         year_label = f"{row['year']}{'*' if row['year'] == current_year else ''}"
         print(
             YEARLY_TABLE_ROW_FORMAT.format(
                 year=year_label,
-                ingest=f"{bytes_to_terabytes(row['ingest_bytes']):,.3f}",
+                ingest=f"{bytes_to_terabytes(row['ingested_bytes']):,.3f}",
                 deleted=f"{bytes_to_terabytes(row['deleted_bytes']):,.3f}",
                 net=f"{bytes_to_terabytes(row['net_bytes']):,.3f}",
                 total=f"{bytes_to_terabytes(row['total_bytes']):,.3f}",
@@ -147,14 +146,15 @@ def print_yearly_summary(title: str, monthly_data, deleted_lookup):
     print(f"* {current_year} total is as at {datetime.now(tz=AWST):%d-%b-%Y}, not 31-Dec.")
 
 
-def write_daily_stats(daily_data, filename):
+def write_daily_stats(daily_data, daily_deleted_data, filename):
     """Write daily stats to a CSV file.
 
     daily_data is the raw pyvo result set from fetch_daily_stats().
+    daily_deleted_data is {(year, month, day, projectid): deleted_bytes} from fetch_daily_deleted_data_from_db().
     """
     i = 0
     total_bytes = 0.0
-    deleted_bytes = 0.0
+    total_deleted_bytes = 0.0
     total_secs = 0.0
 
     with open(filename, mode="w", encoding="utf-8") as stats_csv_file:
@@ -187,15 +187,23 @@ def write_daily_stats(daily_data, filename):
             else:
                 hours = 0.0
 
-            if row["total_archived_bytes"] is not None:
-                this_bytes = int(row["total_archived_bytes"])
+            this_deleted_bytes = daily_deleted_data.get(
+                (
+                    (row["reporting_date"]).year,
+                    (row["reporting_date"]).month,
+                    (row["reporting_date"]).day,
+                    row["projectid"],
+                ),
+                0,
+            )
+            total_deleted_bytes += this_deleted_bytes
+
+            if row["total_ingested_bytes"] is not None:
+                this_bytes = int(row["total_ingested_bytes"]) - this_deleted_bytes
                 total_bytes += this_bytes
                 terabytes = bytes_to_terabytes(this_bytes)
             else:
                 terabytes = 0.0
-
-            if row["deleted_bytes"] is not None:
-                deleted_bytes += int(row["deleted_bytes"])
 
             stats_csv_writer.writerow(
                 (
@@ -213,7 +221,7 @@ def write_daily_stats(daily_data, filename):
     logger.info(f"{i} rows written to {filename}.")
     logger.info(f"Total data: {bytes_to_petabytes(total_bytes)} PB")
     logger.info(f"Total time: {total_secs / 3600} hours")
-    logger.info(f"Total deleted data: {bytes_to_petabytes(deleted_bytes)} PB")
+    logger.info(f"Total deleted data: {bytes_to_petabytes(total_deleted_bytes)} PB")
 
 
 def write_stats_by_project(project_data, filename):
@@ -246,7 +254,7 @@ def write_stats_by_project(project_data, filename):
     logger.info(f"{i} rows written to {filename}.")
 
 
-def write_monthly_stats(monthly_data, filename):
+def write_monthly_stats(monthly_data, daily_deleted_data, filename):
     """Write monthly stats to a CSV file."""
     i = 0
 
@@ -264,8 +272,16 @@ def write_monthly_stats(monthly_data, filename):
             i += 1
             year = row["reporting_year"]
             month = row["reporting_month"]
+
+            # Summarise the daily deleted data into year/month
+            deleted_size: int = sum(
+                deleted_bytes
+                for (y, m, _d, _projid), deleted_bytes in daily_deleted_data.items()
+                if y == year and m == month
+            )
+
             hours = row["total_secs"] / 3600
-            terabytes = bytes_to_terabytes(row["total_archived_bytes"])
+            terabytes = bytes_to_terabytes(row["total_ingested_bytes"] - deleted_size)
             available_hours = get_available_hours(year, month)
             duty_cycle = get_duty_cycle(hours, available_hours)
 

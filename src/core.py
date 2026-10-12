@@ -5,13 +5,12 @@ from zoneinfo import ZoneInfo
 from astropy.time import Time
 
 AWST = ZoneInfo("Australia/Perth")
-LEGACY_FP32_START = datetime(2013, 7, 1, tzinfo=AWST)
 LEGACY_INT32_START = datetime(2014, 10, 15, tzinfo=AWST)
 LEGACY_INT32_COMPRESSED_START = datetime(2017, 11, 1, tzinfo=AWST)
-CORRELATOR_FILETYPE = 8
+FILETYPE_LEGACY_CORRELATOR = 8
 
 BYTES_PER_KB = 1000.0
-BYTES_PER_MB = 1000.0**2
+BYTES_PER_MB = BYTES_PER_KB * 1000.0
 BYTES_PER_GB = BYTES_PER_MB * 1000.0
 BYTES_PER_TB = BYTES_PER_GB * 1000.0
 BYTES_PER_PB = BYTES_PER_TB * 1000.0
@@ -146,12 +145,10 @@ def build_correlator_eras() -> list[CorrelatorEra]:
     Returns:
         The eras, oldest first.
     """
-    fp32_start = datetime_to_gps_seconds(LEGACY_FP32_START)
     int32_start = datetime_to_gps_seconds(LEGACY_INT32_START)
     compressed_start = datetime_to_gps_seconds(LEGACY_INT32_COMPRESSED_START)
     return [
-        CorrelatorEra(f"before {LEGACY_FP32_START:%d-%b-%Y}", None, fp32_start),
-        CorrelatorEra("Legacy correlator fp32", fp32_start, int32_start),
+        CorrelatorEra("Legacy correlator fp32", None, int32_start),
         CorrelatorEra("Legacy correlator int32", int32_start, compressed_start),
         CorrelatorEra("Legacy correlator int32 compressed", compressed_start, None),
     ]
@@ -170,10 +167,10 @@ def build_filetype_slice_where_clauses(obsid_column: str, filetype_column: str) 
     """
     # The first slice is all non-correlator files, which are not split by era.
     # The display order modifier is 100 so that they appear after the correlator eras (which are 1, 2, 3, ...).
-    slices = [("", f"{filetype_column} <> {CORRELATOR_FILETYPE}", 100)]
+    slices = [("Non-legacy correlator (all time)", f"{filetype_column} <> {FILETYPE_LEGACY_CORRELATOR}", 100)]
 
     for i, era in enumerate(build_correlator_eras(), start=1):
-        conditions = [f"{filetype_column} = {CORRELATOR_FILETYPE}"]
+        conditions = [f"{filetype_column} = {FILETYPE_LEGACY_CORRELATOR}"]
         if era.gps_start is not None:
             conditions.append(f"{obsid_column} >= {era.gps_start}")
         if era.gps_end is not None:
@@ -188,7 +185,27 @@ def get_filetype_order() -> list[int]:
     Returns:
         The file types, oldest first.
     """
-    return [CORRELATOR_FILETYPE, 18, 11, 16, 15, 17, 20, 19, 14, 10]
+    FILETYPE_MWAX_CORRELATOR = 18
+    FILETYPE_VCS_RAW = 11
+    FILETYPE_VCS_RECOMBINED_TAR = 16
+    FILETYPE_VCS_ICS = 15
+    FILETYPE_MWAX_VCS = 17
+    FILETYPE_INCOHERENT = 20
+    FILETYPE_COHERENT = 19
+    FILETYPE_METAFITS_PPDS = 14
+    FILETYPE_FLAGS = 10
+    return [
+        FILETYPE_LEGACY_CORRELATOR,
+        FILETYPE_MWAX_CORRELATOR,
+        FILETYPE_VCS_RAW,
+        FILETYPE_VCS_RECOMBINED_TAR,
+        FILETYPE_VCS_ICS,
+        FILETYPE_MWAX_VCS,
+        FILETYPE_INCOHERENT,
+        FILETYPE_COHERENT,
+        FILETYPE_METAFITS_PPDS,
+        FILETYPE_FLAGS,
+    ]
 
 
 def format_file_type_label(filetype: int, description: str | None, era_label: str) -> str:
@@ -255,8 +272,3 @@ def filter_monthly_by_range(monthly_data, date_from, date_to):
     from_ym = (date_from.year, date_from.month)
     to_ym = (date_to.year, date_to.month)
     return [row for row in monthly_data if from_ym <= (row["reporting_year"], row["reporting_month"]) <= to_ym]
-
-
-def build_deleted_lookup(deleted_data):
-    """Build a {(year, month): deleted_bytes} dict for O(1) lookups."""
-    return {(row["reporting_year"], row["reporting_month"]): row["deleted_bytes"] for row in deleted_data}

@@ -22,6 +22,11 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
     date (datetime_mro), joined via FULL OUTER JOIN so months that appear in
     only one table are still included.
 
+    Here we use the deleted_bytes simply to infer the ingested bytes.
+
+    To report on deletions by date deleted, we need to use the MWA databse
+    as it is not correct to associate a deletion with the observation date of the original file.
+
     Returns a list of dicts with keys:
         reporting_year, reporting_month, total_secs,
         total_archived_bytes, files_deleted_bytes,
@@ -32,47 +37,46 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
     results = do_adql_query(
         tap_service,
         """SELECT
-                COALESCE(o.reporting_year, d.reporting_year) as reporting_year
+                 COALESCE(o.reporting_year, d.reporting_year) as reporting_year
                 ,COALESCE(o.reporting_month, d.reporting_month) as reporting_month
-                ,COALESCE(o.total_secs, 0) as total_secs
-                ,COALESCE(o.total_archived_bytes, 0) as total_archived_bytes
-                ,COALESCE(o.files_deleted_bytes, 0) as files_deleted_bytes                
+                ,COALESCE(o.total_secs, 0) as total_secs                
+                ,COALESCE(o.archived_bytes, 0)+COALESCE(o.deleted_bytes, 0) as total_ingested_bytes
                 ,COALESCE(d.downloaded_bytes, 0) as downloaded_bytes
                 ,COALESCE(d.download_count, 0) as download_count
             FROM (
                 SELECT
-                    date_part('year', date_trunc('day', starttime_utc)) as reporting_year
-                    ,date_part('month', date_trunc('day', starttime_utc)) as reporting_month
-                    ,COALESCE(SUM(duration), 0) as total_secs
-                    ,COALESCE(SUM(total_archived_bytes), 0) as total_archived_bytes
-                    ,COALESCE(SUM(files_deleted_bytes), 0) as files_deleted_bytes
-                FROM mwa.observation
+                     date_part('year', starttime_mro) as reporting_year
+                    ,date_part('month', starttime_mro) as reporting_month
+                    ,SUM(duration) as total_secs
+                    ,SUM(total_archived_bytes) as archived_bytes
+                    ,SUM(files_deleted_bytes) as deleted_bytes
+                FROM mwa.observation                
                 GROUP BY 1, 2
             ) o
             FULL OUTER JOIN (
                 SELECT
-                    date_part('year', datetime_mro) as reporting_year
+                     date_part('year', datetime_mro) as reporting_year
                     ,date_part('month', datetime_mro) as reporting_month
-                    ,COALESCE(SUM(downloaded_bytes), 0) as downloaded_bytes
+                    ,SUM(downloaded_bytes) as downloaded_bytes
                     ,COUNT(*) as download_count
-                FROM mwa.obs_download_history
+                FROM mwa.obs_download_history                
                 GROUP BY 1, 2
             ) d ON o.reporting_year = d.reporting_year AND o.reporting_month = d.reporting_month
             ORDER BY 1, 2""",
     )
-    return [
+    return_results = [
         {
             "reporting_year": int(row["reporting_year"]),
             "reporting_month": int(row["reporting_month"]),
             "total_secs": int(row["total_secs"]),
-            "total_archived_bytes": int(row["total_archived_bytes"]),
-            "files_deleted_bytes": int(row["files_deleted_bytes"]),
-            "all_ingested_bytes": int(row["total_archived_bytes"]) + int(row["downloaded_bytes"]),
+            "total_ingested_bytes": int(row["total_ingested_bytes"]),
             "downloaded_bytes": int(row["downloaded_bytes"]),
             "download_count": int(row["download_count"]),
         }
         for row in results
     ]
+
+    return return_results
 
 
 def fetch_project_data_from_tap(tap_service: vo.dal.TAPService, date_from=None, date_to=None):
@@ -125,8 +129,7 @@ def fetch_daily_stats_from_tap(tap_service: vo.dal.TAPService):
                 ,projectid
                 ,mwa_array_configuration
                 ,SUM(duration) as total_time_secs
-                ,SUM(total_archived_bytes) as total_archived_bytes
-                ,SUM(files_deleted_bytes) as deleted_bytes
+                ,COALESCE(SUM(total_archived_bytes),0) + COALESCE(SUM(files_deleted_bytes),0) as total_ingested_bytes
             FROM mwa.observation
             GROUP BY 1,2,3
             ORDER BY 1,2""",
@@ -161,9 +164,9 @@ def fetch_location_summary_bytes_from_tap(tap_service: vo.dal.TAPService):
     logger.info("Running query to get location stats...")
     results = do_adql_query(
         tap_service,
-        """SELECT SUM(archived_bytes_at_pawsey_banksia) as banksia,
-                  SUM(archived_bytes_at_pawsey_acacia_mwa) as acacia_mwa
-           FROM mwa.observation""",
+        """SELECT COALESCE(SUM(archived_bytes_at_pawsey_banksia), 0) as banksia,
+                                 COALESCE(SUM(archived_bytes_at_pawsey_acacia_mwa), 0) as acacia_mwa
+                          FROM mwa.observation""",
     )
 
     acacia_mwa = int(results[0]["acacia_mwa"])

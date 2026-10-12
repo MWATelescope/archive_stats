@@ -7,9 +7,10 @@ from datetime import datetime
 
 from dateutil.relativedelta import relativedelta
 
-from core import AWST, build_deleted_lookup, bytes_to_terabytes
+from core import AWST, bytes_to_terabytes
 from data_db import (
-    fetch_deleted_data_by_month_from_db,
+    build_monthly_deleted_lookup,
+    fetch_daily_deleted_data_from_db,
     fetch_file_size_histogram_from_db,
     fetch_file_type_stats_from_db,
     get_connection_pool,
@@ -179,26 +180,25 @@ def run(config_filename, no_pawsey: bool = False):
     # ---------------------------------------------------------------
     # Fetch data once
     # ---------------------------------------------------------------
-    db_filetype_data = fetch_file_type_stats_from_db(mwa_db)
     tap_monthly_data = fetch_monthly_data_from_tap(mwa_tap_service)
+    db_filetype_data = fetch_file_type_stats_from_db(mwa_db)
     tap_daily_data = fetch_daily_stats_from_tap(mwa_tap_service)
     tap_project_data_all = fetch_project_data_from_tap(mwa_tap_service)
     tap_project_data_6mo = fetch_project_data_from_tap(mwa_tap_service, six_months_ago, today)
     tap_mode_data = fetch_archive_bytes_by_mode_from_tap(mwa_tap_service)
-    db_deleted_data = fetch_deleted_data_by_month_from_db(mwa_db)
+    db_daily_deleted_data = fetch_daily_deleted_data_from_db(mwa_db)
     db_file_size_histogram = fetch_file_size_histogram_from_db(mwa_db)
 
     # Close MWA database
     mwa_db.close()
 
-    # Filter data
-    db_deleted_lookup = build_deleted_lookup(db_deleted_data)
+    db_deleted_lookup = build_monthly_deleted_lookup(db_daily_deleted_data)
 
     logger.info(
         f"Fetched {len(tap_monthly_data)} monthly rows, "
         f"{len(tap_project_data_all)} projects (all time), "
         f"{len(tap_project_data_6mo)} projects (6 mo), "
-        f"{len(db_deleted_data)} deleted-data months, "
+        f"{len(db_daily_deleted_data)} deleted-data days, "
         f"{len(tap_mode_data)} modes."
     )
 
@@ -206,9 +206,9 @@ def run(config_filename, no_pawsey: bool = False):
     # CSV dumps (use pre-fetched data)
     # ---------------------------------------------------------------
     print_file_type_table("File type summary from the MWA database (data_files)", db_filetype_data)
-    print_yearly_summary("Yearly Summary from ()", tap_monthly_data, db_deleted_lookup)
-    write_daily_stats(tap_daily_data, "stats.csv")
-    write_monthly_stats(tap_monthly_data, "stats_by_month.csv")
+    print_yearly_summary(f"Yearly Summary as at {today}", tap_monthly_data, db_daily_deleted_data)
+    write_daily_stats(tap_daily_data, db_daily_deleted_data, "stats.csv")
+    write_monthly_stats(tap_monthly_data, db_daily_deleted_data, "stats_by_month.csv")
     write_stats_by_project(tap_project_data_all, "stats_by_project.csv")
 
     # ---------------------------------------------------------------

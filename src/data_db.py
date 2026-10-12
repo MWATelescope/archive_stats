@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict
 from typing import LiteralString, cast
 
 import psycopg
@@ -54,12 +55,12 @@ def get_connection_pool(host, user, database, password, port) -> ConnectionPool:
     return pool
 
 
-def fetch_deleted_data_by_month_from_db(mwa_db: ConnectionPool):
-    """Fetch all deleted-data monthly aggregates from the database (no date filter).
+def fetch_daily_deleted_data_from_db(mwa_db: ConnectionPool):
+    """Fetch all deleted-data daily/project aggregates from the database (no date filter).
 
-    Returns a list of dicts with keys: reporting_year, reporting_month, deleted_bytes
+    Returns a list of dicts with keys: reporting_year, reporting_month, reporting_date, projectid, deleted_bytes
     """
-    logger.info("Fetching deleted data by month from database...")
+    logger.info("Fetching deleted data by day and projectid from database...")
     results = None
 
     try:
@@ -67,13 +68,15 @@ def fetch_deleted_data_by_month_from_db(mwa_db: ConnectionPool):
             cursor = conn.execute(
                 """
                 SELECT
-                    date_part('year', date_trunc('day', deleted_timestamp)) as reporting_year
-                    ,date_part('month', date_trunc('day', deleted_timestamp)) as reporting_month
+                    date_part('year', deleted_timestamp) as reporting_year
+                    ,date_part('month', deleted_timestamp) as reporting_month
+                    ,date_part('day', deleted_timestamp) as reporting_day
+                    ,projectid
                     ,COALESCE(SUM(size), 0) as deleted_bytes
                 FROM data_files
-                WHERE deleted_timestamp IS NOT NULL
-                GROUP BY 1, 2
-                ORDER BY 1, 2
+                WHERE deleted_timestamp IS NOT NULL                 
+                GROUP BY 1, 2, 3, 4
+                ORDER BY 1, 2, 3, 4
                 """
             )
             results = cursor.fetchall()
@@ -83,14 +86,22 @@ def fetch_deleted_data_by_month_from_db(mwa_db: ConnectionPool):
     if results is None:
         return []
 
-    return [
-        {
-            "reporting_year": int(row[0]),
-            "reporting_month": int(row[1]),
-            "deleted_bytes": int(row[2]),
-        }
-        for row in results
-    ]
+    return {(int(row[0]), int(row[1]), int(row[2]), row[3]): int(row[4]) for row in results}
+
+
+def build_monthly_deleted_lookup(daily_deleted_data) -> dict[tuple[int, int], int]:
+    """Sum deleted bytes per (year, month).
+
+    Args:
+        daily: Deleted bytes keyed by (year, month, day, project_id).
+
+    Returns:
+        Deleted bytes keyed by (year, month).
+    """
+    monthly: defaultdict[tuple[int, int], int] = defaultdict(int)
+    for (year, month, _day, _project_id), deleted_bytes in daily_deleted_data.items():
+        monthly[(year, month)] += deleted_bytes
+    return dict(monthly)
 
 
 def fetch_file_type_stats_from_db(mwa_db: ConnectionPool) -> list[FileTypeStats]:
