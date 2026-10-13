@@ -26,9 +26,32 @@ ISO_DATE_LENGTH = len("YYYY-MM-DD")
 
 ASVO_STAGING_CSV_FILENAME = "asvo_staging_by_month.csv"
 ASVO_STAGING_HISTOGRAM_FILENAME = "asvo_staging_histogram.png"
+ASVO_STAGING_CUMULATIVE_HISTOGRAM_FILENAME = "asvo_staging_histogram_cumulative.png"
 ASVO_STAGING_SECS_DECIMALS = 3
 # The staging time histogram has log-spaced bins between whole powers of 10 seconds.
 ASVO_STAGING_HISTOGRAM_BINS_PER_DECADE = 10
+
+SECS_PER_MINUTE = 60
+SECS_PER_HOUR = 60 * SECS_PER_MINUTE
+SECS_PER_DAY = 24 * SECS_PER_HOUR
+SECS_PER_WEEK = 7 * SECS_PER_DAY
+# Round times (seconds, label) for the top axis of the staging time histogram.
+# Ticks outside the plotted range are left out.
+ASVO_STAGING_TOP_AXIS_TICKS = (
+    (1, "1 s"),
+    (10, "10 s"),
+    (SECS_PER_MINUTE, "1 min"),
+    (10 * SECS_PER_MINUTE, "10 min"),
+    (SECS_PER_HOUR, "1 h"),
+    (6 * SECS_PER_HOUR, "6 h"),
+    (SECS_PER_DAY, "1 day"),
+    (SECS_PER_WEEK, "1 week"),
+    (4 * SECS_PER_WEEK, "4 weeks"),
+)
+ASVO_STAGING_GRID_ALPHA = 0.2
+ASVO_STAGING_PERCENT_TICK_STEP = 10
+PERCENT = 100.0
+PLOT_TITLE_PAD_WITH_TOP_AXIS = 12  # points, so the title clears the top axis label
 
 FILE_TYPE_TABLE_ROW_FORMAT = (
     "{label:<70}\t{count:>14}\t{min_mb:>14}\t{mean_mb:>14}\t{median_mb:>14}\t{max_mb:>14}\t{total_tb:>16}"

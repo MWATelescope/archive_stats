@@ -9,6 +9,7 @@ from dateutil.relativedelta import relativedelta
 
 from core import (
     ASVO_STAGING_CSV_FILENAME,
+    ASVO_STAGING_CUMULATIVE_HISTOGRAM_FILENAME,
     ASVO_STAGING_HISTOGRAM_FILENAME,
     AWST,
     add_deletion_only_months,
@@ -419,6 +420,12 @@ def run(config_filename, no_pawsey: bool = False):
         asvo_staging_times,
         "MWA ASVO Staging Time",
         ASVO_STAGING_HISTOGRAM_FILENAME,
+    )
+    plot_staging_time_histogram(
+        asvo_staging_times,
+        "MWA ASVO Staging Time (cumulative)",
+        ASVO_STAGING_CUMULATIVE_HISTOGRAM_FILENAME,
+        cumulative=True,
     )
 
 

@@ -5,8 +5,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from core import (
+    ASVO_STAGING_GRID_ALPHA,
+    ASVO_STAGING_PERCENT_TICK_STEP,
+    ASVO_STAGING_TOP_AXIS_TICKS,
     DPI,
     FILE_SIZE_PLOT_Y_MARGIN,
+    PERCENT,
+    PLOT_TITLE_PAD_WITH_TOP_AXIS,
     FileSizeBin,
     StagingTime,
     build_staging_histogram_edges,
@@ -416,16 +421,21 @@ def plot_file_size_distribution(size_bins: list[FileSizeBin], title: str, filena
     logger.info(f"Saved {filename} to disk.")
 
 
-def plot_staging_time_histogram(staging_times: list[StagingTime], title: str, filename: str) -> None:
+def plot_staging_time_histogram(
+    staging_times: list[StagingTime], title: str, filename: str, cumulative: bool = False
+) -> None:
     """Plot the number of MWA ASVO jobs per staging time as a histogram.
 
-    The staging time axis is logarithmic, because staging times range from seconds to days. A staging time of zero
-    cannot be drawn on a logarithmic axis, so it is counted in the first bin.
+    The staging time axis is logarithmic, because staging times range from seconds to weeks. A second axis on top
+    shows round times (minutes, hours, days, weeks). A staging time of zero cannot be drawn on a logarithmic axis,
+    so it is counted in the first bin.
 
     Args:
-        staging_times: One entry per staged job.
+        staging_times: One entry per staged job, oldest first.
         title: The plot title.
         filename: The image file to write.
+        cumulative: If True, each bin shows the number of jobs staged in that time or less, not in that bin only.
+            A second axis on the right shows the same count as a percentage of all jobs.
     """
     clear_plots()
 
@@ -435,14 +445,42 @@ def plot_staging_time_histogram(staging_times: list[StagingTime], title: str, fi
         return
 
     edges = build_staging_histogram_edges(elapsed_secs)
+    from_date = min(staging_time.created_awst for staging_time in staging_times)
 
     fig, axis = plt.subplots()
-    axis.hist(np.clip(elapsed_secs, edges[0], None), bins=edges.tolist())
+    axis.hist(np.clip(elapsed_secs, edges[0], None), bins=edges.tolist(), cumulative=cumulative, zorder=3)
     axis.set_xscale("log")
+    axis.set_xlim(edges[0], edges[-1])
+    axis.grid(axis="x", alpha=ASVO_STAGING_GRID_ALPHA, zorder=0)
     axis.set_xlabel("Staging elapsed time (seconds, log scale)")
-    axis.set_ylabel("Number of staging jobs")
+    axis.set_ylabel("Cumulative number of staging jobs" if cumulative else "Number of staging jobs")
 
-    plt.title(f"{title} ({len(elapsed_secs):,} jobs, as at {time.strftime('%d-%b-%Y')})")
+    if cumulative:
+        total_jobs = len(elapsed_secs)
+        percent_axis = axis.secondary_yaxis(
+            "right",
+            functions=(
+                lambda count: np.asarray(count) / total_jobs * PERCENT,
+                lambda percent: np.asarray(percent) / PERCENT * total_jobs,
+            ),
+        )
+        percent_axis.set_yticks(
+            range(0, int(PERCENT) + 1, ASVO_STAGING_PERCENT_TICK_STEP),
+            labels=[f"{percent}%" for percent in range(0, int(PERCENT) + 1, ASVO_STAGING_PERCENT_TICK_STEP)],
+        )
+        percent_axis.set_ylabel("Percentage of staging jobs")
+
+    top_axis = axis.secondary_xaxis("top")
+    top_axis.set_xscale("log")
+    top_ticks = [(secs, label) for secs, label in ASVO_STAGING_TOP_AXIS_TICKS if edges[0] <= secs <= edges[-1]]
+    top_axis.set_xticks([secs for secs, _ in top_ticks], labels=[label for _, label in top_ticks])
+    top_axis.minorticks_off()
+    top_axis.set_xlabel("Same axis in minutes / hours / days / weeks")
+
+    plt.title(
+        f"{title} ({len(elapsed_secs):,} jobs, from {from_date:%d-%b-%Y}, as at {time.strftime('%d-%b-%Y')})",
+        pad=PLOT_TITLE_PAD_WITH_TOP_AXIS,
+    )
     fig.set_size_inches(18.5, 10.5)
     plt.tight_layout()
     plt.savefig(filename, dpi=DPI)
