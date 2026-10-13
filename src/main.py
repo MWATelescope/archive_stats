@@ -7,8 +7,15 @@ from datetime import datetime
 
 from dateutil.relativedelta import relativedelta
 
-from core import AWST, add_deletion_only_months, bytes_to_terabytes
-from data_db import (
+from core import (
+    ASVO_STAGING_CSV_FILENAME,
+    ASVO_STAGING_HISTOGRAM_FILENAME,
+    AWST,
+    add_deletion_only_months,
+    bytes_to_terabytes,
+)
+from data_mwa_asvo_db import fetch_staging_times_from_db
+from data_mwa_db import (
     build_monthly_deleted_lookup,
     fetch_daily_deleted_data_from_db,
     fetch_file_size_histogram_from_db,
@@ -31,13 +38,16 @@ from plots import (
     plot_download_count_per_month,
     plot_downloaded_data_per_month,
     plot_file_size_distribution,
+    plot_staging_time_histogram,
     plot_telescope_time_per_project,
 )
 from stats import (
+    build_monthly_staging_stats,
     print_file_type_table,
     print_yearly_summary,
     write_daily_stats,
     write_monthly_stats,
+    write_staging_stats_by_month,
     write_stats_by_project,
 )
 
@@ -67,6 +77,14 @@ def run(config_filename, no_pawsey: bool = False):
         database=config.get("MWA Database", "dbname"),
         password=config.get("MWA Database", "dbpass"),
         port=config.getint("MWA Database", "dbport"),
+    )
+
+    mwa_asvo_db = get_connection_pool(
+        host=config.get("MWA ASVO Database", "dbhost"),
+        user=config.get("MWA ASVO Database", "dbuser"),
+        database=config.get("MWA ASVO Database", "dbname"),
+        password=config.get("MWA ASVO Database", "dbpass"),
+        port=config.getint("MWA ASVO Database", "dbport"),
     )
 
     acacia_mwa_quota_bytes = config.getint("asvo_stats", "acacia_mwa_quota_bytes")
@@ -178,19 +196,32 @@ def run(config_filename, no_pawsey: bool = False):
     logger.info("-------------------------------------------------------")
 
     # ---------------------------------------------------------------
-    # Fetch data once
+    # Fetch data once from TAP
     # ---------------------------------------------------------------
     tap_monthly_data = fetch_monthly_data_from_tap(mwa_tap_service)
-    db_filetype_data = fetch_file_type_stats_from_db(mwa_db)
     tap_daily_data = fetch_daily_stats_from_tap(mwa_tap_service)
     tap_project_data_all = fetch_project_data_from_tap(mwa_tap_service)
     tap_project_data_6mo = fetch_project_data_from_tap(mwa_tap_service, six_months_ago, today)
     tap_mode_data = fetch_archive_bytes_by_mode_from_tap(mwa_tap_service)
-    db_daily_deleted_data = fetch_daily_deleted_data_from_db(mwa_db)
-    db_file_size_histogram = fetch_file_size_histogram_from_db(mwa_db)
 
-    # Close MWA database
-    mwa_db.close()
+    # ---------------------------------------------------------------
+    # Fetch data once from MWA ASVO database
+    # ---------------------------------------------------------------
+    try:
+        asvo_staging_times = fetch_staging_times_from_db(mwa_asvo_db)
+    finally:
+        mwa_asvo_db.close()
+
+    # ---------------------------------------------------------------
+    # Fetch data once from MWA database
+    # ---------------------------------------------------------------
+    try:
+        db_filetype_data = fetch_file_type_stats_from_db(mwa_db)
+        db_daily_deleted_data = fetch_daily_deleted_data_from_db(mwa_db)
+        db_file_size_histogram = fetch_file_size_histogram_from_db(mwa_db)
+    finally:
+        # Close MWA database
+        mwa_db.close()
 
     db_deleted_lookup = build_monthly_deleted_lookup(db_daily_deleted_data)
 
@@ -380,6 +411,14 @@ def run(config_filename, no_pawsey: bool = False):
         tap_project_data_6mo,
         "MWA Telescope Time (last 6 months)",
         "mwa_telescope_time_last_6_months.png",
+    )
+
+    logger.info(f"Fetched {len(asvo_staging_times)} staging times.")
+    write_staging_stats_by_month(build_monthly_staging_stats(asvo_staging_times), ASVO_STAGING_CSV_FILENAME)
+    plot_staging_time_histogram(
+        asvo_staging_times,
+        "MWA ASVO Staging Time",
+        ASVO_STAGING_HISTOGRAM_FILENAME,
     )
 
 

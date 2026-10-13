@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -23,6 +23,12 @@ YEARLY_TABLE_ROW_FORMAT = "{year:<6}\t{ingest:>14}\t{deleted:>14}\t{net:>14}\t{t
 DPI = 100
 
 ISO_DATE_LENGTH = len("YYYY-MM-DD")
+
+ASVO_STAGING_CSV_FILENAME = "asvo_staging_by_month.csv"
+ASVO_STAGING_HISTOGRAM_FILENAME = "asvo_staging_histogram.png"
+ASVO_STAGING_SECS_DECIMALS = 3
+# The staging time histogram has log-spaced bins between whole powers of 10 seconds.
+ASVO_STAGING_HISTOGRAM_BINS_PER_DECADE = 10
 
 FILE_TYPE_TABLE_ROW_FORMAT = (
     "{label:<70}\t{count:>14}\t{min_mb:>14}\t{mean_mb:>14}\t{median_mb:>14}\t{max_mb:>14}\t{total_tb:>16}"
@@ -117,6 +123,27 @@ class CorrelatorEra:
     label: str
     gps_start: int | None
     gps_end: int | None
+
+
+@dataclass(frozen=True)
+class StagingTime:
+    """The time one MWA ASVO job took to go from 'staging' to 'staged'."""
+
+    created_awst: datetime
+    elapsed_secs: float
+
+
+@dataclass(frozen=True)
+class MonthlyStagingStats:
+    """Staging time statistics of the MWA ASVO jobs created in one month (AWST). Times are in seconds."""
+
+    year: int
+    month: int
+    staging_count: int
+    min_secs: float
+    avg_secs: float
+    median_secs: float
+    max_secs: float
 
 
 @dataclass(frozen=True)
@@ -322,3 +349,45 @@ def add_deletion_only_months(monthly_data, monthly_deleted_lookup):
         if (year, month) not in existing_months
     ]
     return sorted([*monthly_data, *added_rows], key=lambda row: (row["reporting_year"], row["reporting_month"]))
+
+
+def to_awst(value: datetime) -> datetime:
+    """Convert a datetime from the MWA ASVO database to AWST.
+
+    Args:
+        value: A datetime. A datetime with no time zone is taken to be UTC, as the MWA ASVO database stores UTC.
+
+    Returns:
+        The same instant in AWST.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(AWST)
+
+
+def build_staging_histogram_edges(elapsed_secs: list[float]) -> np.ndarray:
+    """Build log-spaced histogram bin edges that cover all staging times.
+
+    The edges run from the power of 10 at or below the smallest positive time to the power of 10 at or above the
+    largest time. Times of zero cannot be placed on a log axis, so the caller must clip them to the first edge.
+
+    Args:
+        elapsed_secs: The staging times in seconds. Must have at least one value above zero.
+
+    Returns:
+        The bin edges in seconds.
+
+    Raises:
+        ValueError: If no staging time is above zero.
+    """
+    positive_secs = [secs for secs in elapsed_secs if secs > 0]
+    if not positive_secs:
+        raise ValueError("No staging time above zero.")
+
+    lowest_exponent = int(np.floor(np.log10(min(positive_secs))))
+    highest_exponent = int(np.ceil(np.log10(max(positive_secs))))
+    if highest_exponent == lowest_exponent:
+        highest_exponent += 1
+
+    bin_count = (highest_exponent - lowest_exponent) * ASVO_STAGING_HISTOGRAM_BINS_PER_DECADE
+    return np.logspace(lowest_exponent, highest_exponent, bin_count + 1)

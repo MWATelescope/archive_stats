@@ -2,16 +2,20 @@
 
 import csv
 import logging
+import statistics
 from collections import defaultdict
 from datetime import datetime
 
 from core import (
+    ASVO_STAGING_SECS_DECIMALS,
     AWST,
     FILE_TYPE_TABLE_ROW_FORMAT,
     FILE_TYPE_TABLE_SIZE_DECIMALS,
     FILE_TYPE_TABLE_TOTAL_DECIMALS,
     YEARLY_TABLE_ROW_FORMAT,
     FileTypeStats,
+    MonthlyStagingStats,
+    StagingTime,
     bytes_to_megabytes,
     bytes_to_petabytes,
     bytes_to_terabytes,
@@ -307,3 +311,58 @@ def write_monthly_stats(monthly_data, monthly_deleted_lookup, filename):
             )
 
     logger.info(f"{i} rows written to {filename}.")
+
+
+def build_monthly_staging_stats(staging_times: list[StagingTime]) -> list[MonthlyStagingStats]:
+    """Summarise the staging times per month of job creation (AWST).
+
+    Args:
+        staging_times: One entry per staged job.
+
+    Returns:
+        One entry per month that has at least one job, oldest first.
+    """
+    secs_by_month: defaultdict[tuple[int, int], list[float]] = defaultdict(list)
+    for staging_time in staging_times:
+        secs_by_month[(staging_time.created_awst.year, staging_time.created_awst.month)].append(
+            staging_time.elapsed_secs
+        )
+
+    return [
+        MonthlyStagingStats(
+            year=year,
+            month=month,
+            staging_count=len(secs),
+            min_secs=min(secs),
+            avg_secs=statistics.fmean(secs),
+            median_secs=statistics.median(secs),
+            max_secs=max(secs),
+        )
+        for (year, month), secs in sorted(secs_by_month.items())
+    ]
+
+
+def write_staging_stats_by_month(monthly_stats: list[MonthlyStagingStats], filename: str) -> None:
+    """Write the monthly staging time statistics to a CSV file.
+
+    Args:
+        monthly_stats: Rows from build_monthly_staging_stats().
+        filename: The CSV file to write.
+    """
+    with open(filename, mode="w", encoding="utf-8", newline="") as stats_csv_file:
+        stats_csv_writer = csv.writer(stats_csv_file, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        stats_csv_writer.writerow(("year", "month", "staging_count", "min_secs", "avg_secs", "median_secs", "max_secs"))
+        for row in monthly_stats:
+            stats_csv_writer.writerow(
+                (
+                    row.year,
+                    row.month,
+                    row.staging_count,
+                    round(row.min_secs, ASVO_STAGING_SECS_DECIMALS),
+                    round(row.avg_secs, ASVO_STAGING_SECS_DECIMALS),
+                    round(row.median_secs, ASVO_STAGING_SECS_DECIMALS),
+                    round(row.max_secs, ASVO_STAGING_SECS_DECIMALS),
+                )
+            )
+
+    logger.info(f"{len(monthly_stats)} rows written to {filename}.")

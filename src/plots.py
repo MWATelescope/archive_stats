@@ -8,6 +8,8 @@ from core import (
     DPI,
     FILE_SIZE_PLOT_Y_MARGIN,
     FileSizeBin,
+    StagingTime,
+    build_staging_histogram_edges,
     bytes_to_petabytes,
     bytes_to_terabytes,
     filter_monthly_by_range,
@@ -408,6 +410,39 @@ def plot_file_size_distribution(size_bins: list[FileSizeBin], title: str, filena
     axis.set_ylabel("Number of files (log scale)")
 
     plt.title(f"{title} (as at {time.strftime('%d-%b-%Y')})")
+    fig.set_size_inches(18.5, 10.5)
+    plt.tight_layout()
+    plt.savefig(filename, dpi=DPI)
+    logger.info(f"Saved {filename} to disk.")
+
+
+def plot_staging_time_histogram(staging_times: list[StagingTime], title: str, filename: str) -> None:
+    """Plot the number of MWA ASVO jobs per staging time as a histogram.
+
+    The staging time axis is logarithmic, because staging times range from seconds to days. A staging time of zero
+    cannot be drawn on a logarithmic axis, so it is counted in the first bin.
+
+    Args:
+        staging_times: One entry per staged job.
+        title: The plot title.
+        filename: The image file to write.
+    """
+    clear_plots()
+
+    elapsed_secs = [staging_time.elapsed_secs for staging_time in staging_times]
+    if not any(secs > 0 for secs in elapsed_secs):
+        logger.warning("No staging times above zero to plot.")
+        return
+
+    edges = build_staging_histogram_edges(elapsed_secs)
+
+    fig, axis = plt.subplots()
+    axis.hist(np.clip(elapsed_secs, edges[0], None), bins=edges.tolist())
+    axis.set_xscale("log")
+    axis.set_xlabel("Staging elapsed time (seconds, log scale)")
+    axis.set_ylabel("Number of staging jobs")
+
+    plt.title(f"{title} ({len(elapsed_secs):,} jobs, as at {time.strftime('%d-%b-%Y')})")
     fig.set_size_inches(18.5, 10.5)
     plt.tight_layout()
     plt.savefig(filename, dpi=DPI)
