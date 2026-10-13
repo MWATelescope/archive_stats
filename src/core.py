@@ -26,10 +26,12 @@ ISO_DATE_LENGTH = len("YYYY-MM-DD")
 
 ASVO_STAGING_CSV_FILENAME = "asvo_staging_by_month.csv"
 ASVO_STAGING_HISTOGRAM_FILENAME = "asvo_staging_histogram.png"
-ASVO_STAGING_CUMULATIVE_HISTOGRAM_FILENAME = "asvo_staging_histogram_cumulative.png"
 ASVO_STAGING_SECS_DECIMALS = 3
 # The staging time histogram has log-spaced bins between whole powers of 10 seconds.
 ASVO_STAGING_HISTOGRAM_BINS_PER_DECADE = 10
+# The staging time histogram starts at 10**ASVO_STAGING_MIN_SECS_EXPONENT seconds (0.1 s). Shorter staging times,
+# including zero, are counted in the first bin.
+ASVO_STAGING_MIN_SECS_EXPONENT = -1
 
 SECS_PER_MINUTE = 60
 SECS_PER_HOUR = 60 * SECS_PER_MINUTE
@@ -38,6 +40,7 @@ SECS_PER_WEEK = 7 * SECS_PER_DAY
 # Round times (seconds, label) for the top axis of the staging time histogram.
 # Ticks outside the plotted range are left out.
 ASVO_STAGING_TOP_AXIS_TICKS = (
+    (0.1, "0.1 s"),
     (1, "1 s"),
     (10, "10 s"),
     (SECS_PER_MINUTE, "1 min"),
@@ -48,10 +51,20 @@ ASVO_STAGING_TOP_AXIS_TICKS = (
     (SECS_PER_WEEK, "1 week"),
     (4 * SECS_PER_WEEK, "4 weeks"),
 )
-ASVO_STAGING_GRID_ALPHA = 0.2
+ASVO_STAGING_CUMULATIVE_LINE_COLOR = "black"
+ASVO_STAGING_CUMULATIVE_LINE_WIDTH = 2.0
+# The top of the count axis is at least this much above the tallest bar.
+ASVO_STAGING_COUNT_AXIS_HEADROOM = 1.05
+# Tick step sizes of the count axis are these multiples of a power of 10 (2.5 only for steps of 25 or more).
+COUNT_AXIS_STEP_MANTISSAS = (1, 2, 5, 10)
+COUNT_AXIS_STEP_MANTISSAS_WITH_2_5 = (1, 2, 2.5, 5, 10)
+ASVO_STAGING_GRID_COLOR = "black"
+ASVO_STAGING_GRID_ALPHA = 0.25
+ASVO_STAGING_GRID_LINEWIDTH = 0.8
+ASVO_STAGING_GRID_ZORDER = 2.5  # above the histogram bars (zorder 1)
 ASVO_STAGING_PERCENT_TICK_STEP = 10
 PERCENT = 100.0
-PLOT_TITLE_PAD_WITH_TOP_AXIS = 12  # points, so the title clears the top axis label
+PLOT_TITLE_PAD_WITH_TOP_AXIS = 40  # points, so the title clears the top axis tick labels and label
 
 FILE_TYPE_TABLE_ROW_FORMAT = (
     "{label:<70}\t{count:>14}\t{min_mb:>14}\t{mean_mb:>14}\t{median_mb:>14}\t{max_mb:>14}\t{total_tb:>16}"
@@ -391,26 +404,46 @@ def to_awst(value: datetime) -> datetime:
 def build_staging_histogram_edges(elapsed_secs: list[float]) -> np.ndarray:
     """Build log-spaced histogram bin edges that cover all staging times.
 
-    The edges run from the power of 10 at or below the smallest positive time to the power of 10 at or above the
-    largest time. Times of zero cannot be placed on a log axis, so the caller must clip them to the first edge.
+    The edges run from 10**ASVO_STAGING_MIN_SECS_EXPONENT seconds (0.1 s) to the power of 10 at or above the largest
+    time, and cover at least one power of 10. Staging times below the first edge, including zero, cannot be placed on
+    a log axis, so the caller must clip them to the first edge. They are then counted in the first bin.
 
     Args:
-        elapsed_secs: The staging times in seconds. Must have at least one value above zero.
+        elapsed_secs: The staging times in seconds. Must not be empty.
 
     Returns:
         The bin edges in seconds.
 
     Raises:
-        ValueError: If no staging time is above zero.
+        ValueError: If there are no staging times.
     """
-    positive_secs = [secs for secs in elapsed_secs if secs > 0]
-    if not positive_secs:
-        raise ValueError("No staging time above zero.")
+    if not elapsed_secs:
+        raise ValueError("No staging times.")
 
-    lowest_exponent = int(np.floor(np.log10(min(positive_secs))))
-    highest_exponent = int(np.ceil(np.log10(max(positive_secs))))
-    if highest_exponent == lowest_exponent:
-        highest_exponent += 1
+    largest_secs = max(elapsed_secs)
+    highest_exponent = int(np.ceil(np.log10(largest_secs))) if largest_secs > 0 else ASVO_STAGING_MIN_SECS_EXPONENT
+    highest_exponent = max(highest_exponent, ASVO_STAGING_MIN_SECS_EXPONENT + 1)
 
-    bin_count = (highest_exponent - lowest_exponent) * ASVO_STAGING_HISTOGRAM_BINS_PER_DECADE
-    return np.logspace(lowest_exponent, highest_exponent, bin_count + 1)
+    bin_count = (highest_exponent - ASVO_STAGING_MIN_SECS_EXPONENT) * ASVO_STAGING_HISTOGRAM_BINS_PER_DECADE
+    return np.logspace(ASVO_STAGING_MIN_SECS_EXPONENT, highest_exponent, bin_count + 1)
+
+
+def build_aligned_count_axis_maximum(max_count: int, intervals: int) -> int:
+    """Build the top of a count axis so that its ticks can line up with the ticks of a percentage axis.
+
+    The count axis is split into equal intervals, one for each interval of the percentage axis. The interval size
+    is a round whole number, and the top is the smallest value at least ASVO_STAGING_COUNT_AXIS_HEADROOM times
+    max_count.
+
+    Args:
+        max_count: The count of the tallest bar.
+        intervals: The number of equal intervals, for example 10 for percentage ticks every 10%.
+
+    Returns:
+        The top of the count axis. It is a whole number and a multiple of intervals.
+    """
+    wanted_step = max(max_count * ASVO_STAGING_COUNT_AXIS_HEADROOM / intervals, 1.0)
+    exponent = int(np.floor(np.log10(wanted_step)))
+    mantissas = COUNT_AXIS_STEP_MANTISSAS_WITH_2_5 if exponent >= 1 else COUNT_AXIS_STEP_MANTISSAS
+    step = next(mantissa * 10**exponent for mantissa in mantissas if mantissa * 10**exponent >= wanted_step)
+    return int(step * intervals)
