@@ -64,7 +64,7 @@ def plot_archive_volume_per_month(
     stride_count = 0
 
     for row in rows:
-        net_bytes = row["all_ingested_bytes"]
+        net_bytes = row["total_ingested_bytes"]
         cumulative_volume_bytes += net_bytes
 
         if not ingest_only:

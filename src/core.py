@@ -1,10 +1,14 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import numpy as np
 from astropy.time import Time
 
-AWST = ZoneInfo("Australia/Perth")
+# All reporting dates (observation, download and deletion dates) are in AWST (UTC+8, no DST).
+# The TAP *_mro columns are already AWST. Columns in the MWA database are converted using this time zone name.
+AWST_TZ_NAME = "Australia/Perth"
+AWST = ZoneInfo(AWST_TZ_NAME)
 LEGACY_INT32_START = datetime(2014, 10, 15, tzinfo=AWST)
 LEGACY_INT32_COMPRESSED_START = datetime(2017, 11, 1, tzinfo=AWST)
 FILETYPE_LEGACY_CORRELATOR = 8
@@ -17,6 +21,8 @@ BYTES_PER_PB = BYTES_PER_TB * 1000.0
 YEARLY_TABLE_ROW_FORMAT = "{year:<6}\t{ingest:>14}\t{deleted:>14}\t{net:>14}\t{total:>18}"
 
 DPI = 100
+
+ISO_DATE_LENGTH = len("YYYY-MM-DD")
 
 FILE_TYPE_TABLE_ROW_FORMAT = (
     "{label:<70}\t{count:>14}\t{min_mb:>14}\t{mean_mb:>14}\t{median_mb:>14}\t{max_mb:>14}\t{total_tb:>16}"
@@ -272,3 +278,47 @@ def filter_monthly_by_range(monthly_data, date_from, date_to):
     from_ym = (date_from.year, date_from.month)
     to_ym = (date_to.year, date_to.month)
     return [row for row in monthly_data if from_ym <= (row["reporting_year"], row["reporting_month"]) <= to_ym]
+
+
+def to_date(value) -> date:
+    """Convert a date-like value returned by a TAP query to a plain date.
+
+    Args:
+        value: A datetime, date, numpy datetime64 or ISO 8601 string.
+
+    Returns:
+        The calendar date, with no time zone conversion.
+    """
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, np.datetime64):
+        return value.astype("datetime64[D]").item()
+    return date.fromisoformat(str(value)[:ISO_DATE_LENGTH])
+
+
+def add_deletion_only_months(monthly_data, monthly_deleted_lookup):
+    """Add a zero-ingest row for each month that has deletions but no TAP row.
+
+    Args:
+        monthly_data: Rows from fetch_monthly_data_from_tap().
+        monthly_deleted_lookup: {(year, month): deleted_bytes} from build_monthly_deleted_lookup().
+
+    Returns:
+        The rows of monthly_data plus the added rows, sorted by (year, month).
+    """
+    existing_months = {(row["reporting_year"], row["reporting_month"]) for row in monthly_data}
+    added_rows = [
+        {
+            "reporting_year": year,
+            "reporting_month": month,
+            "total_secs": 0,
+            "total_ingested_bytes": 0,
+            "downloaded_bytes": 0,
+            "download_count": 0,
+        }
+        for (year, month) in monthly_deleted_lookup
+        if (year, month) not in existing_months
+    ]
+    return sorted([*monthly_data, *added_rows], key=lambda row: (row["reporting_year"], row["reporting_month"]))

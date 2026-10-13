@@ -1,5 +1,6 @@
 import logging
 from collections import defaultdict
+from datetime import date
 from typing import LiteralString, cast
 
 import psycopg
@@ -7,6 +8,7 @@ from psycopg import sql
 from psycopg_pool import ConnectionPool
 
 from core import (
+    AWST_TZ_NAME,
     MEDIAN_QUANTILE,
     FileSizeBin,
     FileTypeStats,
@@ -55,52 +57,61 @@ def get_connection_pool(host, user, database, password, port) -> ConnectionPool:
     return pool
 
 
-def fetch_daily_deleted_data_from_db(mwa_db: ConnectionPool):
+def fetch_daily_deleted_data_from_db(mwa_db: ConnectionPool) -> dict[tuple[date, str | None], int]:
     """Fetch all deleted-data daily/project aggregates from the database (no date filter).
 
-    Returns a list of dicts with keys: reporting_year, reporting_month, reporting_date, projectid, deleted_bytes
+    The deletion date is the calendar date of deleted_timestamp in AWST. The project comes from mwa_setting, joined
+    with a LEFT JOIN so that deleted files with no matching observation are still counted (projectid is None).
+
+    Args:
+        mwa_db: The MWA database connection pool.
+
+    Returns:
+        Deleted bytes keyed by (deletion date in AWST, projectid).
+
+    Raises:
+        psycopg.DatabaseError: If the query fails. This is not caught because an empty result would make the
+            reported deleted volume silently wrong.
+        psycopg.OperationalError: If the database connection fails.
     """
     logger.info("Fetching deleted data by day and projectid from database...")
-    results = None
 
     try:
         with mwa_db.connection() as conn:
             cursor = conn.execute(
                 """
                 SELECT
-                    date_part('year', deleted_timestamp) as reporting_year
-                    ,date_part('month', deleted_timestamp) as reporting_month
-                    ,date_part('day', deleted_timestamp) as reporting_day
-                    ,projectid
-                    ,COALESCE(SUM(size), 0) as deleted_bytes
-                FROM data_files
-                WHERE deleted_timestamp IS NOT NULL                 
-                GROUP BY 1, 2, 3, 4
-                ORDER BY 1, 2, 3, 4
-                """
+                    CAST(f.deleted_timestamp::timestamptz AT TIME ZONE %s AS date) as reporting_date
+                    ,s.projectid
+                    ,COALESCE(SUM(f.size), 0) as deleted_bytes
+                FROM data_files f
+                INNER JOIN mwa_setting s ON s.starttime = f.observation_num
+                WHERE f.deleted_timestamp IS NOT NULL and f.remote_archived=True
+                GROUP BY 1, 2
+                ORDER BY 1, 2
+                """,
+                (AWST_TZ_NAME,),
             )
             results = cursor.fetchall()
-    except (psycopg.DatabaseError, psycopg.OperationalError) as error:
-        logger.error(error)
+    except psycopg.DatabaseError, psycopg.OperationalError:
+        logger.exception("Failed to fetch deleted data from the database.")
+        raise
 
-    if results is None:
-        return []
-
-    return {(int(row[0]), int(row[1]), int(row[2]), row[3]): int(row[4]) for row in results}
+    return {(row[0], row[1]): int(row[2]) for row in results}
 
 
-def build_monthly_deleted_lookup(daily_deleted_data) -> dict[tuple[int, int], int]:
+def build_monthly_deleted_lookup(daily_deleted_data: dict[tuple[date, str | None], int]) -> dict[tuple[int, int], int]:
     """Sum deleted bytes per (year, month).
 
     Args:
-        daily: Deleted bytes keyed by (year, month, day, project_id).
+        daily_deleted_data: Deleted bytes keyed by (deletion date, projectid).
 
     Returns:
         Deleted bytes keyed by (year, month).
     """
     monthly: defaultdict[tuple[int, int], int] = defaultdict(int)
-    for (year, month, _day, _project_id), deleted_bytes in daily_deleted_data.items():
-        monthly[(year, month)] += deleted_bytes
+    for (deleted_date, _project_id), deleted_bytes in daily_deleted_data.items():
+        monthly[(deleted_date.year, deleted_date.month)] += deleted_bytes
     return dict(monthly)
 
 

@@ -7,7 +7,7 @@ from datetime import datetime
 
 from dateutil.relativedelta import relativedelta
 
-from core import AWST, bytes_to_terabytes
+from core import AWST, add_deletion_only_months, bytes_to_terabytes
 from data_db import (
     build_monthly_deleted_lookup,
     fetch_daily_deleted_data_from_db,
@@ -194,6 +194,9 @@ def run(config_filename, no_pawsey: bool = False):
 
     db_deleted_lookup = build_monthly_deleted_lookup(db_daily_deleted_data)
 
+    # Months with deletions but no observations or downloads must still appear in the stats and plots.
+    tap_monthly_data = add_deletion_only_months(tap_monthly_data, db_deleted_lookup)
+
     logger.info(
         f"Fetched {len(tap_monthly_data)} monthly rows, "
         f"{len(tap_project_data_all)} projects (all time), "
@@ -206,9 +209,9 @@ def run(config_filename, no_pawsey: bool = False):
     # CSV dumps (use pre-fetched data)
     # ---------------------------------------------------------------
     print_file_type_table("File type summary from the MWA database (data_files)", db_filetype_data)
-    print_yearly_summary(f"Yearly Summary as at {today}", tap_monthly_data, db_daily_deleted_data)
+    print_yearly_summary(f"Yearly Summary as at {today:%d-%b-%Y}", tap_monthly_data, db_deleted_lookup)
     write_daily_stats(tap_daily_data, db_daily_deleted_data, "stats.csv")
-    write_monthly_stats(tap_monthly_data, db_daily_deleted_data, "stats_by_month.csv")
+    write_monthly_stats(tap_monthly_data, db_deleted_lookup, "stats_by_month.csv")
     write_stats_by_project(tap_project_data_all, "stats_by_project.csv")
 
     # ---------------------------------------------------------------

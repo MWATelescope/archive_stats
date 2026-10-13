@@ -4,6 +4,8 @@ import pyvo as vo
 
 logger = logging.getLogger("archive_stats")
 
+ADQL_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
 
 def get_tap_service(tap_url: str) -> vo.dal.TAPService:
     return vo.dal.TAPService(tap_url)
@@ -17,20 +19,21 @@ def do_adql_query(vo_service: vo.dal.TAPService, adql_statement: str):
 def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
     """Fetch all monthly aggregates in a single TAP query (no date filter).
 
-    Observation-side aggregates are grouped by observation date (starttime_utc).
+    All months are AWST: the *_mro columns are local time at the MRO (UTC+8).
+    Observation-side aggregates are grouped by observation date (starttime_mro).
     Download bytes come from obs_download_history grouped by actual download
     date (datetime_mro), joined via FULL OUTER JOIN so months that appear in
     only one table are still included.
 
-    Here we use the deleted_bytes simply to infer the ingested bytes.
+    Here we use the files_deleted_bytes simply to infer the ingested bytes
+    (total_archived_bytes + files_deleted_bytes).
 
-    To report on deletions by date deleted, we need to use the MWA databse
+    To report on deletions by date deleted, we need to use the MWA database
     as it is not correct to associate a deletion with the observation date of the original file.
 
     Returns a list of dicts with keys:
         reporting_year, reporting_month, total_secs,
-        total_archived_bytes, files_deleted_bytes,
-        all_ingested_bytes, downloaded_bytes,
+        total_ingested_bytes, downloaded_bytes,
         download_count
     """
     logger.info("Fetching monthly data from TAP...")
@@ -88,7 +91,10 @@ def fetch_project_data_from_tap(tap_service: vo.dal.TAPService, date_from=None, 
     """
     where_clause = ""
     if date_from is not None and date_to is not None:
-        where_clause = f"WHERE starttime_utc BETWEEN '{date_from}' AND '{date_to}'"
+        # starttime_mro is AWST wall time, so format the AWST datetimes as wall time with no UTC offset.
+        where_clause = (
+            f"WHERE starttime_mro BETWEEN '{date_from:{ADQL_TIMESTAMP_FORMAT}}' AND '{date_to:{ADQL_TIMESTAMP_FORMAT}}'"
+        )
 
     label = f" ({date_from} to {date_to})" if date_from else " (all time)"
     logger.info(f"Fetching project data from TAP{label}...")
@@ -118,6 +124,8 @@ def fetch_project_data_from_tap(tap_service: vo.dal.TAPService, date_from=None, 
 def fetch_daily_stats_from_tap(tap_service: vo.dal.TAPService):
     """Fetch daily stats by project/config for the CSV dump.
 
+    Days are AWST (starttime_mro). Each row is one (date, projectid, config) group.
+
     This is the finest-grained query and can't be shared with plots,
     so it remains its own TAP call.
     """
@@ -125,7 +133,7 @@ def fetch_daily_stats_from_tap(tap_service: vo.dal.TAPService):
     return do_adql_query(
         tap_service,
         """SELECT
-                date_trunc('day', starttime_utc) As reporting_date
+                date_trunc('day', starttime_mro) As reporting_date
                 ,projectid
                 ,mwa_array_configuration
                 ,SUM(duration) as total_time_secs
