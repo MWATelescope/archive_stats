@@ -1,15 +1,27 @@
 [project]
 name = "archive_stats"
-version = "1.0.0"
-requires-python = ">=3.12"
+version = "1.0.1"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "astropy",
     "boto3",
     "matplotlib",
     "pyvo",
     "numpy",
-    "psycopg2-binary"
+    "psycopg[binary,pool]",
+    "ruff",
+    "ty",
 ]
 
 [dependency-groups]
-dev = ["pytest"]
+dev = ["pytest", "ruff", "ty"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ty.environment]
+extra-paths = ["src"]
