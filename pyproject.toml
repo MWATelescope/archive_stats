@@ -8,9 +8,9 @@ dependencies = [
     "matplotlib",
     "pyvo",
     "numpy",
-    "psycopg2-binary",
+    "psycopg[binary,pool]",
     "ruff",
-    "ty"
+    "ty",
 ]
 
 [dependency-groups]
@@ -22,3 +22,6 @@ line-length = 120
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.ty.environment]
+extra-paths = ["src"]
