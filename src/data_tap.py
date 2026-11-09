@@ -42,8 +42,8 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
         """SELECT
                  COALESCE(o.reporting_year, d.reporting_year) as reporting_year
                 ,COALESCE(o.reporting_month, d.reporting_month) as reporting_month
-                ,COALESCE(o.total_secs, 0) as total_secs                
-                ,COALESCE(o.archived_bytes, 0)+COALESCE(o.deleted_bytes, 0) as total_ingested_bytes
+                ,COALESCE(o.total_secs, 0) as total_secs
+                ,COALESCE(o.archived_bytes, 0) as archived_bytes                    
                 ,COALESCE(d.downloaded_bytes, 0) as downloaded_bytes
                 ,COALESCE(d.download_count, 0) as download_count
             FROM (
@@ -72,7 +72,7 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
             "reporting_year": int(row["reporting_year"]),
             "reporting_month": int(row["reporting_month"]),
             "total_secs": int(row["total_secs"]),
-            "total_ingested_bytes": int(row["total_ingested_bytes"]),
+            "total_ingested_bytes": int(row["archived_bytes"]) + int(row["deleted_bytes"]),
             "downloaded_bytes": int(row["downloaded_bytes"]),
             "download_count": int(row["download_count"]),
         }
