@@ -293,15 +293,15 @@ def plot_telescope_time_per_project(project_data, title, filename):
     max_slices = 8
     other_time = 0
 
-    # Sort by hours descending so the top-N are the biggest time consumers
-    sorted_data = sorted(project_data, key=lambda r: r["totaltime_hours"], reverse=True)
+    # Sort by seconds descending so the top-N are the biggest time consumers
+    sorted_data = sorted(project_data, key=lambda r: r["totaltime_secs"], reverse=True)
 
     for i, row in enumerate(sorted_data):
         if i >= max_slices:
-            other_time += row["totaltime_hours"]
+            other_time += row["totaltime_secs"] / 3600.0
         else:
             labels.append(f"{row['projectid']}-{row['projectshortname']}")
-            x_values.append(row["totaltime_hours"])
+            x_values.append(row["totaltime_secs"] / 3600.0)
 
     # Add 'Other'
     labels.append("Other")
