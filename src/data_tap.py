@@ -106,7 +106,7 @@ def fetch_project_data_from_tap(tap_service: vo.dal.TAPService, date_from=None, 
                 projectid
                 ,projectshortname
                 ,COALESCE(SUM(total_archived_bytes), 0) as total_archived_bytes
-                ,COALESCE(SUM(duration), 0) / 3600 as totaltime_hours
+                ,COALESCE(SUM(duration), 0) as totaltime_secs
             FROM mwa.observation
             {where_clause}
             GROUP BY projectid, projectshortname""",
@@ -116,7 +116,7 @@ def fetch_project_data_from_tap(tap_service: vo.dal.TAPService, date_from=None, 
             "projectid": row["projectid"],
             "projectshortname": row["projectshortname"],
             "total_archived_bytes": int(row["total_archived_bytes"]),
-            "totaltime_hours": int(row["totaltime_hours"]),
+            "totaltime_secs": int(row["totaltime_secs"]),
         }
         for row in results
     ]
