@@ -59,7 +59,7 @@ console_log.setFormatter(logging.Formatter("%(asctime)s, %(levelname)s, %(thread
 logger.addHandler(console_log)
 
 
-def run(config_filename, no_pawsey: bool = False):
+def run(config_filename, no_pawsey: bool = False, no_mwa_asvo: bool = False):
     """Main function"""
     # Usage: python stats.py --cfg=path/to/config/file
 
@@ -79,13 +79,14 @@ def run(config_filename, no_pawsey: bool = False):
         port=config.getint("MWA Database", "dbport"),
     )
 
-    mwa_asvo_db = get_connection_pool(
-        host=config.get("MWA ASVO Database", "dbhost"),
-        user=config.get("MWA ASVO Database", "dbuser"),
-        database=config.get("MWA ASVO Database", "dbname"),
-        password=config.get("MWA ASVO Database", "dbpass"),
-        port=config.getint("MWA ASVO Database", "dbport"),
-    )
+    if not no_mwa_asvo:
+        mwa_asvo_db = get_connection_pool(
+            host=config.get("MWA ASVO Database", "dbhost"),
+            user=config.get("MWA ASVO Database", "dbuser"),
+            database=config.get("MWA ASVO Database", "dbname"),
+            password=config.get("MWA ASVO Database", "dbpass"),
+            port=config.getint("MWA ASVO Database", "dbport"),
+        )
 
     acacia_mwa_quota_bytes = config.getint("asvo_stats", "acacia_mwa_quota_bytes")
     banksia_quota_bytes = config.getint("asvo_stats", "banksia_quota_bytes")
@@ -207,10 +208,11 @@ def run(config_filename, no_pawsey: bool = False):
     # ---------------------------------------------------------------
     # Fetch data once from MWA ASVO database
     # ---------------------------------------------------------------
-    try:
-        asvo_staging_times = fetch_staging_times_from_db(mwa_asvo_db)
-    finally:
-        mwa_asvo_db.close()
+    if not no_mwa_asvo:
+        try:
+            asvo_staging_times = fetch_staging_times_from_db(mwa_asvo_db)
+        finally:
+            mwa_asvo_db.close()
 
     # ---------------------------------------------------------------
     # Fetch data once from MWA database
@@ -413,13 +415,14 @@ def run(config_filename, no_pawsey: bool = False):
         "mwa_telescope_time_last_6_months.png",
     )
 
-    logger.info(f"Fetched {len(asvo_staging_times)} staging times.")
-    write_staging_stats_by_month(build_monthly_staging_stats(asvo_staging_times), ASVO_STAGING_CSV_FILENAME)
-    plot_staging_time_histogram(
-        asvo_staging_times,
-        "MWA ASVO Staging Time",
-        ASVO_STAGING_HISTOGRAM_FILENAME,
-    )
+    if not no_mwa_asvo:
+        logger.info(f"Fetched {len(asvo_staging_times)} staging times.")
+        write_staging_stats_by_month(build_monthly_staging_stats(asvo_staging_times), ASVO_STAGING_CSV_FILENAME)
+        plot_staging_time_histogram(
+            asvo_staging_times,
+            "MWA ASVO Staging Time",
+            ASVO_STAGING_HISTOGRAM_FILENAME,
+        )
 
 
 if __name__ == "__main__":
@@ -429,12 +432,13 @@ if __name__ == "__main__":
         "archive_stats calculates usage from info dervied"
         " from the MWA database, TAP service, Acacia and"
         " Banksia. Needs to be run from a machine with access"
-        " to Acacia/Banksia and the MWA database.\n"
+        " to the MWA database and optionally, Acacia/Banksia and the MWA ASVO database.\n"
     )
 
     parser.add_argument("-c", "--cfg", required=True, help="Configuration file location.\n")
     parser.add_argument("-n", "--no-pawsey", action="store_true", help="Do not get Pawsey data sizes.\n")
+    parser.add_argument("-a", "--no-mwa-asvo", action="store_true", help="Do not get MWA ASVO data.\n")
 
     args = vars(parser.parse_args())
 
-    run(args["cfg"], args["no_pawsey"])
+    run(args["cfg"], args["no_pawsey"], args["no_mwa_asvo"])
