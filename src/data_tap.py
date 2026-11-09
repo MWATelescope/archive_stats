@@ -138,7 +138,8 @@ def fetch_daily_stats_from_tap(tap_service: vo.dal.TAPService):
                 ,projectid
                 ,mwa_array_configuration
                 ,SUM(duration) as total_time_secs
-                ,COALESCE(SUM(total_archived_bytes),0) + COALESCE(SUM(files_deleted_bytes),0) as total_ingested_bytes
+                ,COALESCE(SUM(total_archived_bytes),0) as total_archived_bytes
+                ,COALESCE(SUM(files_deleted_bytes),0) as files_deleted_bytes
             FROM mwa.observation
             GROUP BY 1,2,3
             ORDER BY 1,2""",

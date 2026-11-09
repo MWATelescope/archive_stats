@@ -198,8 +198,10 @@ def write_daily_stats(daily_data, daily_deleted_data, filename):
             row_date = to_date(row["reporting_date"])
 
             secs = int(row["total_time_secs"]) if row["total_time_secs"] is not None else 0
-            ingested_bytes = int(row["total_ingested_bytes"]) if row["total_ingested_bytes"] is not None else 0
-            deleted_bytes = unwritten_deleted_data.pop((row_date, row["projectid"]), 0)
+            deleted_bytes = int(row["files_deleted_bytes"]) if row["files_deleted_bytes"] is not None else 0
+            ingested_bytes = (
+                int(row["total_archived_bytes"]) if row["total_archived_bytes"] is not None else 0
+            ) + deleted_bytes
 
             total_secs += secs
             total_ingested_bytes += ingested_bytes
