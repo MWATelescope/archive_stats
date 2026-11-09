@@ -43,7 +43,8 @@ def fetch_monthly_data_from_tap(tap_service: vo.dal.TAPService):
                  COALESCE(o.reporting_year, d.reporting_year) as reporting_year
                 ,COALESCE(o.reporting_month, d.reporting_month) as reporting_month
                 ,COALESCE(o.total_secs, 0) as total_secs
-                ,COALESCE(o.archived_bytes, 0) as archived_bytes                    
+                ,COALESCE(o.archived_bytes, 0) as archived_bytes
+                ,COALESCE(o.deleted_bytes, 0) as deleted_bytes
                 ,COALESCE(d.downloaded_bytes, 0) as downloaded_bytes
                 ,COALESCE(d.download_count, 0) as download_count
             FROM (
